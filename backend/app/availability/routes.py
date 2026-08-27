@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from flask import jsonify, request
 from flask_login import current_user
 
@@ -7,6 +5,7 @@ from app.availability import bp
 from app.extensions import db
 from app.models import Month, Slot, Availability, SelectionWindow
 from app.utils.decorators import login_required_api
+from app.utils.tz import local_now
 
 
 def _window_is_open(month):
@@ -15,7 +14,7 @@ def _window_is_open(month):
     sw = SelectionWindow.query.filter_by(month_id=month.id).first()
     if not sw:
         return True  # no configured window: state alone gates it
-    now = datetime.utcnow()
+    now = local_now()
     return sw.opens_at <= now <= sw.closes_at
 
 

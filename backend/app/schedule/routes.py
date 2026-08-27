@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from flask import jsonify, request
 
 from app.schedule import bp
@@ -8,6 +6,7 @@ from app.models import Month, Schedule, Assignment, Slot, Availability, Student
 from app.schedule.solver import solve_month
 from app.utils.decorators import overseer_required, login_required_api
 from app.utils.settings import get_solver_weights, get_floor_hours
+from app.utils.tz import local_now
 from app.notifications.service import notify_committed
 
 
@@ -22,7 +21,7 @@ def generate_draft(month_id):
     floor_hours = get_floor_hours()
     result, meta = solve_month(month.id, weights, floor_hours)
 
-    schedule = Schedule(month_id=month.id, status="draft", generated_at=datetime.utcnow(),
+    schedule = Schedule(month_id=month.id, status="draft", generated_at=local_now(),
                          solver_weights={"weights": weights, "floor_hours": floor_hours, "meta": meta})
     db.session.add(schedule)
     db.session.flush()
@@ -71,7 +70,6 @@ def _schedule_payload(schedule):
 @login_required_api
 def my_assignments():
     from flask_login import current_user
-    from datetime import date as date_cls
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
     rows = (
@@ -160,7 +158,7 @@ def commit_schedule(month_id):
         return jsonify({"error": "no_draft_to_commit"}), 409
 
     schedule.status = "committed"
-    schedule.committed_at = datetime.utcnow()
+    schedule.committed_at = local_now()
     month.state = "committed"
     db.session.commit()
 

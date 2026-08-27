@@ -12,9 +12,10 @@ mockup's day view almost exactly (Wei-Chen 8-10, Sandy 10-12 with an 11:00
 no-show, Kevin 13-14, Amy 14-15, an open 15:00, Grace 16-17).
 """
 import calendar
-from datetime import date as date_cls, datetime, timedelta
+from datetime import date as date_cls, datetime
 
 from app.extensions import db
+from app.utils.tz import local_now, local_today
 from app.models import (
     Semester, Student, Month, Slot, Availability, Schedule, Assignment,
     AttendanceSession, HourlyReport, SLOT_HOURS,
@@ -54,7 +55,7 @@ WEEK_TEMPLATE = [
 def _first_free_year_month():
     """Never touch a real month — pick the first calendar month (starting this
     one) that has no Month row yet."""
-    today = date_cls.today()
+    today = local_today()
     year, month = today.year, today.month
     while True:
         ym = f"{year:04d}-{month:02d}"
@@ -113,7 +114,7 @@ def seed_demo():
 
     semester = Semester.query.filter_by(name=DEMO_SEMESTER_NAME).first()
     if not semester:
-        today = date_cls.today()
+        today = local_today()
         semester = Semester(
             name=DEMO_SEMESTER_NAME,
             starts_on=today.replace(month=1, day=1),
@@ -148,7 +149,7 @@ def seed_demo():
             slots_by_date_hour[(d, hour)] = slot
     db.session.flush()
 
-    now = datetime.utcnow()
+    now = local_now()
     for (d, hour), slot in slots_by_date_hour.items():
         hour_idx = SLOT_HOURS.index(hour)
         student_idx = WEEK_TEMPLATE[hour_idx][d.weekday()]

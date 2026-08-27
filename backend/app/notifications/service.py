@@ -1,11 +1,10 @@
 """Idempotent notification dispatch. Every notification is gated by a
 sent-flag on notification_log so a missed/late/doubled /tick self-heals
 (CLAUDE.md #12)."""
-from datetime import datetime
-
 from app.extensions import db
 from app.models import NotificationLog
 from app.notifications.backends import get_backend
+from app.utils.tz import local_now
 
 
 def notify_once(type_, target, related_type, related_id, message):
@@ -29,7 +28,7 @@ def notify_once(type_, target, related_type, related_id, message):
         db.session.commit()  # keep the row so it's retried next tick
         raise
 
-    row.sent_at = datetime.utcnow()
+    row.sent_at = local_now()
     row.sent_flag = True
     db.session.commit()
     return True

@@ -1,4 +1,3 @@
-from datetime import datetime
 
 from flask import jsonify, request
 from flask_login import current_user
@@ -9,6 +8,7 @@ from app.models import LeaveRequest, Slot, Assignment, Schedule, ReopenedSlot, S
 from app.utils.decorators import login_required_api, overseer_required
 from app.attendance.routes import _slot_start
 from app.notifications.service import notify_slot_open
+from app.utils.tz import local_now
 
 
 @bp.get("")
@@ -43,7 +43,7 @@ def request_leave():
     if not assignment:
         return jsonify({"error": "not_scheduled_for_slot"}), 400
 
-    now = datetime.utcnow()
+    now = local_now()
     lead_hours = (_slot_start(slot) - now).total_seconds() / 3600.0
 
     lr = LeaveRequest(student_id=current_user.student_id, slot_id=slot_id, reason=reason,
@@ -83,7 +83,7 @@ def decide_leave(leave_id):
 
     lr.status = decision
     lr.decided_by = current_user.id
-    lr.decided_at = datetime.utcnow()
+    lr.decided_at = local_now()
 
     if decision == "approved":
         assignment = (
@@ -95,7 +95,7 @@ def decide_leave(leave_id):
         if assignment:
             db.session.delete(assignment)
         lr.slot.state = "reopened"
-        reopened = ReopenedSlot(slot_id=lr.slot_id, leave_request_id=lr.id, opened_at=datetime.utcnow())
+        reopened = ReopenedSlot(slot_id=lr.slot_id, leave_request_id=lr.id, opened_at=local_now())
         db.session.add(reopened)
         db.session.flush()
         db.session.commit()
@@ -124,7 +124,7 @@ def claim_reopened(reopened_id):
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
 
-    now = datetime.utcnow()
+    now = local_now()
     updated = (
         db.session.query(ReopenedSlot)
         .filter(ReopenedSlot.id == reopened_id, ReopenedSlot.claimed_by.is_(None))

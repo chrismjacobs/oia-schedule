@@ -3,7 +3,7 @@ Surfaces: scheduled-vs-recorded gaps, no-shows, leave patterns, uncovered
 slots, task completion. All values here are derived, never stored
 (SCHEMA.md 'Derived values')."""
 from collections import defaultdict
-from datetime import date as date_cls, datetime, timedelta
+from datetime import datetime, timedelta
 
 from flask import jsonify, request, current_app
 
@@ -13,6 +13,7 @@ from app.models import (
     LeaveRequest, RegularTask, TaskCompletion, CustomTask,
 )
 from app.utils.decorators import overseer_required
+from app.utils.tz import local_now, local_today
 
 
 def _committed_schedule(month_id):
@@ -22,7 +23,7 @@ def _committed_schedule(month_id):
 
 def build_month_dashboard(month):
     schedule = _committed_schedule(month.id)
-    today = date_cls.today()
+    today = local_today()
 
     students = {s.id: s for s in Student.query.filter_by(is_active=True).all()}
     slots = Slot.query.filter_by(month_id=month.id).all()
@@ -161,7 +162,7 @@ def day_view(date_str):
     reported_slot_ids = {r.slot_id for r in reports}
 
     grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
-    now = datetime.utcnow()
+    now = local_now()
 
     rows = []
     for slot in slots:

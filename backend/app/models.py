@@ -1,10 +1,10 @@
 import uuid
-from datetime import datetime, date as date_cls
 
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app.extensions import db
+from app.utils.tz import local_now
 
 # --- Managed palette (CLAUDE.md #14) — exhaust colours before reusing with a shape ---
 STUDENT_PALETTE = [
@@ -54,7 +54,7 @@ class Student(db.Model):
     line_user_id = db.Column(db.String(64), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)  # seeded row — "Reset demo data" deletes these
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=local_now)
 
     semester = db.relationship("Semester", back_populates="students")
     user = db.relationship("User", back_populates="student", uselist=False)
@@ -97,7 +97,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(16), nullable=False)  # overseer | student
     invite_token = db.Column(db.String(36), nullable=True, unique=True)
     invite_accepted_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=local_now)
 
     student = db.relationship("Student", back_populates="user")
 
@@ -193,7 +193,7 @@ class Availability(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
-    submitted_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    submitted_at = db.Column(db.DateTime, nullable=False, default=local_now)
 
     student = db.relationship("Student")
     slot = db.relationship("Slot", back_populates="availabilities")
@@ -206,7 +206,7 @@ class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     month_id = db.Column(db.Integer, db.ForeignKey("month.id"), nullable=False)
     status = db.Column(db.String(16), nullable=False, default="draft")  # draft|committed
-    generated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    generated_at = db.Column(db.DateTime, nullable=False, default=local_now)
     committed_at = db.Column(db.DateTime, nullable=True)
     solver_weights = db.Column(db.JSON, nullable=True)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)  # seeded schedule — cleared by "Reset demo data"
@@ -233,7 +233,7 @@ class Assignment(db.Model):
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
     source = db.Column(db.String(16), nullable=False)  # solver|manual_edit|claimed
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=local_now)
 
     schedule = db.relationship("Schedule", back_populates="assignments")
     slot = db.relationship("Slot", back_populates="assignments")
@@ -257,7 +257,7 @@ class LeaveRequest(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
     reason = db.Column(db.Text, nullable=False)
-    requested_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    requested_at = db.Column(db.DateTime, nullable=False, default=local_now)
     lead_time_hours = db.Column(db.Float, nullable=True)
     status = db.Column(db.String(16), nullable=False, default="pending")  # pending|approved|denied
     decided_by = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
@@ -283,7 +283,7 @@ class ReopenedSlot(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
     leave_request_id = db.Column(db.Integer, db.ForeignKey("leave_request.id"), nullable=False)
-    opened_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    opened_at = db.Column(db.DateTime, nullable=False, default=local_now)
     claimed_by = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)
     claimed_at = db.Column(db.DateTime, nullable=True)
 
@@ -384,7 +384,7 @@ class TaskCompletion(db.Model):
     session_id = db.Column(db.Integer, db.ForeignKey("attendance_session.id"), nullable=False)
     hourly_report_id = db.Column(db.Integer, db.ForeignKey("hourly_report.id"), nullable=True)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=True)
-    completed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime, nullable=False, default=local_now)
     period_key = db.Column(db.String(16), nullable=False)
     proof_s3_key = db.Column(db.String(255), nullable=True)  # student's completion photo
 
@@ -446,7 +446,7 @@ class TimecardUpload(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
     period_label = db.Column(db.String(16), nullable=False)
     s3_key = db.Column(db.String(255), nullable=False)
-    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=local_now)
     cadence = db.Column(db.String(16), nullable=False)  # per_session|weekly|monthly
 
     student = db.relationship("Student")
@@ -490,4 +490,4 @@ class AppSetting(db.Model):
     __tablename__ = "app_setting"
     key = db.Column(db.String(64), primary_key=True)
     value = db.Column(db.JSON, nullable=False)
-    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=local_now, onupdate=local_now)

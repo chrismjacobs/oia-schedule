@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, date as date_cls
+from datetime import datetime, timedelta
 
 from flask import jsonify, request, current_app
 from flask_login import current_user
@@ -12,6 +12,7 @@ from app.models import (
 from app.utils.decorators import login_required_api
 from app.utils.periods import period_key_for
 from app.utils.s3 import upload_object
+from app.utils.tz import local_now, local_today
 
 
 def _slot_start(slot):
@@ -36,9 +37,9 @@ def _todays_assignments(student_id, on_date):
 def today():
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
-    today_date = date_cls.today()
+    today_date = local_today()
     assignments = _todays_assignments(current_user.student_id, today_date)
-    now = datetime.utcnow()
+    now = local_now()
     opens_before = timedelta(minutes=current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"])
 
     slot_rows = []
@@ -66,7 +67,7 @@ def today():
 def sign_in():
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
-    today_date = date_cls.today()
+    today_date = local_today()
 
     existing = AttendanceSession.query.filter_by(
         student_id=current_user.student_id, date=today_date, signed_out_at=None
@@ -75,7 +76,7 @@ def sign_in():
         return jsonify({"error": "session_already_open", "session": existing.to_dict()}), 409
 
     assignments = _todays_assignments(current_user.student_id, today_date)
-    now = datetime.utcnow()
+    now = local_now()
 
     session = AttendanceSession(student_id=current_user.student_id, date=today_date, signed_in_at=now)
     if not assignments:
@@ -91,7 +92,7 @@ def sign_in():
 def available_tasks():
     """Regular tasks not yet done this period + open custom tasks — shown at
     sign-out (CLAUDE.md #9)."""
-    today_date = date_cls.today()
+    today_date = local_today()
     regular = RegularTask.query.filter_by(is_active=True).all()
     available_regular = []
     for t in regular:
@@ -146,7 +147,7 @@ def sign_out():
         return jsonify({"error": "no_open_session"}), 404
 
     todays_slot_ids = {a.slot_id for a in _todays_assignments(current_user.student_id, session.date)}
-    now = datetime.utcnow()
+    now = local_now()
     skipped = []
 
     for r in reports:

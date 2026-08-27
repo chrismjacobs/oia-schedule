@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from flask import jsonify, request
 from flask_login import current_user
 
@@ -8,6 +6,7 @@ from app.extensions import db
 from app.models import RegularTask, CustomTask
 from app.utils.decorators import overseer_required, login_required_api
 from app.utils.s3 import upload_object, presigned_view_url
+from app.utils.tz import local_now
 
 
 @bp.get("/regular")
@@ -134,7 +133,7 @@ def claim_custom(task_id):
     updated = (
         db.session.query(CustomTask)
         .filter(CustomTask.id == task_id, CustomTask.status == "open")
-        .update({"status": "claimed", "claimed_by": current_user.student_id, "claimed_at": datetime.utcnow()},
+        .update({"status": "claimed", "claimed_by": current_user.student_id, "claimed_at": local_now()},
                 synchronize_session=False)
     )
     if updated == 0:

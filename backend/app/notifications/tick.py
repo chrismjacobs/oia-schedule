@@ -8,7 +8,7 @@ sent_flag (see notifications/service.py).
 All timestamps in this app are naive datetimes interpreted as the
 deployment's local timezone (Asia/Taipei, per SCHEMA.md) — there is a single
 tenant and no cross-timezone users, so this is simpler than threading tzinfo
-through every column.
+through every column. See app.utils.tz.local_now() — never datetime.utcnow().
 """
 from datetime import datetime, timedelta
 
@@ -17,6 +17,7 @@ from flask import current_app
 from app.extensions import db
 from app.models import Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession
 from app.notifications.service import notify_selection_open, notify_closing_warning, notify_no_show
+from app.utils.tz import local_now
 
 
 def _auto_advance_selection_windows(now):
@@ -101,7 +102,7 @@ def _flag_forgotten_signouts(now):
 
 
 def run_tick():
-    now = datetime.utcnow()
+    now = local_now()
     result = {"ran_at": now.isoformat()}
     result.update(_auto_advance_selection_windows(now))
     result.update(_check_no_shows(now))

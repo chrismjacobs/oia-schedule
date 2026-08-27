@@ -1,5 +1,4 @@
 import re
-from datetime import datetime
 
 from flask import jsonify, request
 from flask_login import login_user, logout_user, current_user
@@ -9,6 +8,7 @@ from app.extensions import db
 from app.models import User, Student, Semester
 from app.utils.identity import assign_token
 from app.utils.decorators import login_required_api
+from app.utils.tz import local_now
 
 STUDENT_ID_RE = re.compile(r"^[0-9]{8}$")
 
@@ -61,7 +61,7 @@ def register():
 
     user.student_id = student.id
     user.set_password(password)
-    user.invite_accepted_at = datetime.utcnow()
+    user.invite_accepted_at = local_now()
     db.session.commit()
 
     login_user(user)
