@@ -159,7 +159,17 @@ def day_view(date_str):
         HourlyReport.query.join(AttendanceSession, HourlyReport.session_id == AttendanceSession.id)
         .filter(HourlyReport.slot_id.in_([s.id for s in slots])).all()
     )
-    reported_slot_ids = {r.slot_id for r in reports}
+    report_by_slot = {r.slot_id: r for r in reports}
+    report_ids = [r.id for r in reports]
+
+    tasks_by_report = {}
+    if report_ids:
+        for tc in TaskCompletion.query.filter(TaskCompletion.hourly_report_id.in_(report_ids)).all():
+            tasks_by_report.setdefault(tc.hourly_report_id, {"regular": [], "custom": []})["regular"].append(
+                tc.regular_task.to_dict())
+        for ct in CustomTask.query.filter(CustomTask.hourly_report_id.in_(report_ids)).all():
+            tasks_by_report.setdefault(ct.hourly_report_id, {"regular": [], "custom": []})["custom"].append(
+                ct.to_dict())
 
     grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
     now = local_now()
@@ -167,9 +177,10 @@ def day_view(date_str):
     rows = []
     for slot in slots:
         a = assignment_by_slot.get(slot.id)
+        report = report_by_slot.get(slot.id)
         status = "uncovered"
         if a:
-            if slot.id in reported_slot_ids:
+            if report:
                 status = "recorded"
             else:
                 # No-show = assignment for a past slot with no covering session
@@ -182,6 +193,8 @@ def day_view(date_str):
             "assignment": a.to_dict() if a else None,
             "student": students.get(a.student_id) if a else None,
             "status": status,
+            "note": report.note if report else None,
+            "tasks_done": tasks_by_report.get(report.id) if report else None,
         })
 
     return jsonify({"date": date_str, "slots": rows})

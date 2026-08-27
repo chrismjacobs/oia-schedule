@@ -57,6 +57,12 @@ def setup_page():
     return render_template("setup.html", active_nav="setup", wide_page=True)
 
 
+@bp.get("/student-history")
+@page_overseer_required
+def student_history_page():
+    return render_template("student_history.html", active_nav="setup")
+
+
 @bp.get("/availability")
 @page_login_required
 def availability_page():

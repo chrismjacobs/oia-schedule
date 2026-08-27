@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Student history{% endblock %}
+{% block content %}
+<div id="hist-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2 v-if="student">[[ student.chinese_name ]] [[ student.english_name ]] <span class="hint">[[ student.student_id ]]</span></h2>
+    <p><a href="/setup">&larr; Back to Setup</a></p>
+
+    <div class="panel">
+      <h3>Sign-in / report history</h3>
+      <p class="hint" v-if="loading">Loading…</p>
+      <p class="hint" v-else-if="!history.length">No sessions yet.</p>
+      <div v-for="sess in history" v-bind:key="sess.id" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--rule);">
+        <div style="display:flex; justify-content:space-between; align-items:baseline;">
+          <strong class="mono">[[ sess.date ]]</strong>
+          <span class="hint mono">[[ formatTime(sess.signed_in_at) ]] – [[ sess.signed_out_at ? formatTime(sess.signed_out_at) : 'still open' ]]</span>
+        </div>
+        <span class="badge warn" v-if="sess.flagged">[[ sess.flag_reason ]]</span>
+        <div v-for="r in sess.reports" v-bind:key="r.slot.id" style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
+          <span class="mono">[[ r.slot.hour ]]:00</span>
+          <span v-if="r.note"> — [[ r.note ]]</span>
+          <div class="hint" v-if="taskLabels(r).length">✓ [[ taskLabels(r).join(', ') ]]</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const params = new URLSearchParams(window.location.search);
+const studentId = params.get("student_id");
+
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { student: null, history: [], loading: true };
+  },
+  async mounted() {
+    if (!studentId) return;
+    try {
+      const students = await OIA.api.get("/api/admin/students");
+      this.student = students.find(s => String(s.id) === String(studentId)) || null;
+      this.history = await OIA.api.get("/api/attendance/history?student_id=" + studentId);
+    } finally {
+      this.loading = false;
+    }
+  },
+  methods: {
+    formatTime(iso) { return iso ? iso.slice(11, 16) : ""; },
+    taskLabels(report) {
+      const labels = [];
+      (report.regular_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      (report.custom_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      return labels;
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#hist-app");
+</script>
+{% endblock %}

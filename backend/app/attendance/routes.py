@@ -42,13 +42,23 @@ def today():
     now = local_now()
     opens_before = timedelta(minutes=current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"])
 
+    todays_reports = (
+        HourlyReport.query.join(AttendanceSession, HourlyReport.session_id == AttendanceSession.id)
+        .filter(AttendanceSession.student_id == current_user.student_id, AttendanceSession.date == today_date)
+        .all()
+    )
+    report_by_slot = {r.slot_id: r for r in todays_reports}
+
     slot_rows = []
     for a in sorted(assignments, key=lambda a: a.slot.hour):
         slot = a.slot
         start = _slot_start(slot)
+        report = report_by_slot.get(slot.id)
         slot_rows.append({
             **slot.to_dict(),
             "sign_in_open": start - opens_before <= now <= start + timedelta(hours=1),
+            "already_reported": report is not None,
+            "note": report.note if report else None,
         })
 
     open_session = AttendanceSession.query.filter_by(
@@ -60,6 +70,53 @@ def today():
         "scheduled_slots": slot_rows,
         "open_session": open_session.to_dict() if open_session else None,
     })
+
+
+@bp.get("/history")
+@login_required_api
+def history():
+    """Past sign-in/out sessions with their per-hour reports and completed
+    tasks — students see their own; the overseer can pass ?student_id= to
+    review anyone's (this is the answer to "where can I see my/their past
+    reports", not just today's live session)."""
+    days = min(request.args.get("days", 30, type=int), 90)
+    since = local_today() - timedelta(days=days)
+
+    if current_user.role == "overseer":
+        student_id = request.args.get("student_id", type=int)
+        if not student_id:
+            return jsonify({"error": "student_id_required"}), 400
+    else:
+        if not current_user.student_id:
+            return jsonify({"error": "students_only"}), 403
+        student_id = current_user.student_id
+
+    sessions = (
+        AttendanceSession.query.filter(
+            AttendanceSession.student_id == student_id, AttendanceSession.date >= since
+        )
+        .order_by(AttendanceSession.date.desc(), AttendanceSession.signed_in_at.desc())
+        .all()
+    )
+
+    out = []
+    for s in sessions:
+        reports = HourlyReport.query.filter_by(session_id=s.id).order_by(HourlyReport.slot_id).all()
+        report_rows = []
+        for r in reports:
+            regular_done = TaskCompletion.query.filter_by(hourly_report_id=r.id).all()
+            custom_done = CustomTask.query.filter_by(hourly_report_id=r.id).all()
+            report_rows.append({
+                "slot": r.slot.to_dict(),
+                "note": r.note,
+                "regular_tasks_done": [t.regular_task.to_dict() for t in regular_done],
+                "custom_tasks_done": [t.to_dict() for t in custom_done],
+            })
+        d = s.to_dict()
+        d["reports"] = report_rows
+        out.append(d)
+
+    return jsonify(out)
 
 
 @bp.post("/sign-in")
@@ -76,6 +133,23 @@ def sign_in():
         return jsonify({"error": "session_already_open", "session": existing.to_dict()}), 409
 
     assignments = _todays_assignments(current_user.student_id, today_date)
+
+    # Multiple separate shift blocks in one day are legitimate (e.g. 8-10 and
+    # 14-16, each its own sign-in/out) — but a repeat sign-in with nothing new
+    # to cover isn't, and would double-count recorded hours on the dashboard.
+    if assignments:
+        already_reported_slot_ids = {
+            hr.slot_id for hr in HourlyReport.query.join(
+                AttendanceSession, HourlyReport.session_id == AttendanceSession.id
+            ).filter(
+                AttendanceSession.student_id == current_user.student_id,
+                AttendanceSession.date == today_date,
+            ).all()
+        }
+        if all(a.slot_id in already_reported_slot_ids for a in assignments):
+            return jsonify({"error": "all_scheduled_hours_reported",
+                             "message": "You've already reported all your scheduled hours today."}), 409
+
     now = local_now()
 
     session = AttendanceSession(student_id=current_user.student_id, date=today_date, signed_in_at=now)
@@ -147,6 +221,14 @@ def sign_out():
         return jsonify({"error": "no_open_session"}), 404
 
     todays_slot_ids = {a.slot_id for a in _todays_assignments(current_user.student_id, session.date)}
+    already_reported_slot_ids = {
+        hr.slot_id for hr in HourlyReport.query.join(
+            AttendanceSession, HourlyReport.session_id == AttendanceSession.id
+        ).filter(
+            AttendanceSession.student_id == current_user.student_id,
+            AttendanceSession.date == session.date,
+        ).all()
+    }
     now = local_now()
     skipped = []
 
@@ -154,6 +236,10 @@ def sign_out():
         slot_id = r.get("slot_id")
         if slot_id not in todays_slot_ids:
             return jsonify({"error": "slot_not_scheduled_for_student", "slot_id": slot_id}), 400
+        if slot_id in already_reported_slot_ids:
+            # Already covered by an earlier session today — reporting it again
+            # would double-count recorded hours on the dashboard.
+            continue
 
         hr = HourlyReport(session_id=session.id, slot_id=slot_id, note=(r.get("note") or "").strip() or None)
         db.session.add(hr)

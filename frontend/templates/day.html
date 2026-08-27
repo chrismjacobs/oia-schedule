@@ -66,6 +66,13 @@
           <div class="hrs" v-else-if="row.status === 'flagged'">排 <b>1h</b> · 到 0h</div>
         </div>
         <button class="fill-btn" v-else>Advertise</button>
+
+        <div v-if="row.status === 'recorded'" style="grid-column:1/-1; margin-top:8px; padding-top:8px; border-top:1px dashed var(--rule);">
+          <div v-if="row.note" style="font-size:12.5px; color:var(--ink-2);">[[ row.note ]]</div>
+          <div v-if="taskLabels(row.tasks_done).length" class="hint" style="margin-top:2px;">
+            ✓ [[ taskLabels(row.tasks_done).join(', ') ]]
+          </div>
+        </div>
       </div>
     </template>
   </section>
@@ -108,6 +115,13 @@ const app = createApp({
       const d = new Date(this.date + "T00:00:00");
       d.setDate(d.getDate() + days);
       this.date = d.toISOString().slice(0, 10);
+    },
+    taskLabels(tasksDone) {
+      if (!tasksDone) return [];
+      const labels = [];
+      (tasksDone.regular || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      (tasksDone.custom || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      return labels;
     },
   },
 });

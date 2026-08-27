@@ -9,17 +9,33 @@
     <template v-else-if="today">
       <div class="panel" v-if="!today.scheduled_slots.length">No shifts scheduled today. 今天沒有排班</div>
 
+      <div class="panel" v-if="reportedSlots.length">
+        <h3>Already reported today 今日已回報</h3>
+        <div v-for="s in reportedSlots" v-bind:key="s.id" style="margin-bottom:8px;">
+          <strong class="mono">[[ s.hour ]]:00</strong>
+          <span class="hint" v-if="s.note"> — [[ s.note ]]</span>
+        </div>
+      </div>
+
       <div class="panel" v-if="!today.open_session && today.scheduled_slots.length">
         <p>Today's shifts:
           <span class="mono" v-for="s in today.scheduled_slots" v-bind:key="s.id" style="margin-right:8px;">[[ s.hour ]]:00</span>
         </p>
-        <button v-bind:disabled="busy || !today.scheduled_slots.some(s => s.sign_in_open)" v-on:click="signIn">Sign in 簽到</button>
-        <p class="hint" v-if="!today.scheduled_slots.some(s => s.sign_in_open)">Sign-in opens 10 minutes before your first shift.</p>
+        <button v-bind:disabled="busy || !canSignIn" v-on:click="signIn">Sign in 簽到</button>
+        <p class="hint" v-if="!canSignIn && unreportedSlots.length === 0">
+          All your scheduled hours today are already reported.
+        </p>
+        <p class="hint" v-else-if="!today.scheduled_slots.some(s => s.sign_in_open)">
+          Sign-in opens 10 minutes before your first shift.
+        </p>
       </div>
 
       <div class="panel" v-if="today.open_session">
         <span class="badge ok">Currently signed in 在班中</span>
-        <div v-for="s in today.scheduled_slots" v-bind:key="s.id" style="margin:14px 0; padding-bottom:14px; border-bottom:1px solid var(--rule);">
+        <p class="hint" v-if="!unreportedSlots.length">
+          Nothing left to report — sign out to close this session.
+        </p>
+        <div v-for="s in unreportedSlots" v-bind:key="s.id" style="margin:14px 0; padding-bottom:14px; border-bottom:1px solid var(--rule);">
           <strong class="mono">[[ s.hour ]]:00</strong>
           <div class="field">
             <label>What you did 工作紀錄</label>
@@ -61,9 +77,29 @@
           </div>
         </div>
         <button v-bind:disabled="busy" v-on:click="signOut">Sign out 簽退</button>
+        <p class="hint">Sign-out is honour-system — it isn't blocked before your shift ends. Leaving early just
+          shows up as a scheduled-vs-recorded gap on the dashboard, which is the point: the app records what
+          actually happened rather than forcing a minimum.</p>
       </div>
       <p class="hint" style="margin:0 16px;">[[ message ]]</p>
     </template>
+
+    <div class="panel" style="margin-top:20px;">
+      <h3>Recent history 歷史紀錄</h3>
+      <p class="hint" v-if="!history.length">No past sessions yet.</p>
+      <div v-for="sess in history" v-bind:key="sess.id" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--rule);">
+        <div style="display:flex; justify-content:space-between; align-items:baseline;">
+          <strong class="mono">[[ sess.date ]]</strong>
+          <span class="hint mono">[[ formatTime(sess.signed_in_at) ]] – [[ sess.signed_out_at ? formatTime(sess.signed_out_at) : 'still open' ]]</span>
+        </div>
+        <span class="badge warn" v-if="sess.flagged">[[ sess.flag_reason ]]</span>
+        <div v-for="r in sess.reports" v-bind:key="r.slot.id" style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
+          <span class="mono">[[ r.slot.hour ]]:00</span>
+          <span v-if="r.note"> — [[ r.note ]]</span>
+          <div class="hint" v-if="taskLabels(r).length">✓ [[ taskLabels(r).join(', ') ]]</div>
+        </div>
+      </div>
+    </div>
   </section>
 </div>
 {% endblock %}
@@ -73,9 +109,28 @@ const { createApp } = Vue;
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { today: null, tasks: { regular_tasks: [], custom_tasks: [] }, reportRows: {}, proofFiles: {}, loading: true, busy: false, message: "" };
+    return {
+      today: null, tasks: { regular_tasks: [], custom_tasks: [] }, reportRows: {}, proofFiles: {},
+      history: [], loading: true, busy: false, message: "",
+    };
   },
-  async mounted() { await this.load(); },
+  computed: {
+    unreportedSlots() {
+      return this.today ? this.today.scheduled_slots.filter(s => !s.already_reported) : [];
+    },
+    reportedSlots() {
+      return this.today ? this.today.scheduled_slots.filter(s => s.already_reported) : [];
+    },
+    canSignIn() {
+      if (!this.today) return false;
+      if (!this.today.scheduled_slots.length) return true; // flags as not-scheduled, allowed
+      return this.unreportedSlots.some(s => s.sign_in_open);
+    },
+  },
+  async mounted() {
+    await this.load();
+    this.history = await OIA.api.get("/api/attendance/history");
+  },
   methods: {
     async load() {
       this.loading = true;
@@ -83,7 +138,7 @@ const app = createApp({
         this.today = await OIA.api.get("/api/attendance/today");
         if (this.today.open_session) {
           this.tasks = await OIA.api.get("/api/attendance/tasks");
-          this.today.scheduled_slots.forEach(s => {
+          this.unreportedSlots.forEach(s => {
             if (!this.reportRows[s.id]) this.reportRows[s.id] = { note: "", regular: {}, custom: {} };
           });
         }
@@ -122,7 +177,7 @@ const app = createApp({
       this.busy = true; this.message = "";
       try {
         const reports = [];
-        for (const s of this.today.scheduled_slots) {
+        for (const s of this.unreportedSlots) {
           const row = this.reportRows[s.id];
           const regular_task_ids = [];
           for (const [taskId, checked] of Object.entries(row.regular)) {
@@ -143,11 +198,21 @@ const app = createApp({
         const res = await OIA.api.post("/api/attendance/sign-out", { session_id: this.today.open_session.id, reports });
         this.message = res.skipped && res.skipped.length ? "Signed out — some tasks need a photo to count as done." : "Signed out.";
         await this.load();
+        this.history = await OIA.api.get("/api/attendance/history");
       } catch (e) {
         this.message = e.message;
       } finally {
         this.busy = false;
       }
+    },
+    formatTime(iso) {
+      return iso ? iso.slice(11, 16) : "";
+    },
+    taskLabels(report) {
+      const labels = [];
+      (report.regular_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      (report.custom_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      return labels;
     },
   },
 });

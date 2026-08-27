@@ -34,7 +34,10 @@
             <td class="mono">[[ s.student_id ]]</td>
             <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
             <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
-            <td><button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button></td>
+            <td>
+              <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
+              <a v-bind:href="'/student-history?student_id=' + s.id" class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none; margin-left:4px;">History</a>
+            </td>
           </tr>
         </tbody>
       </table>
