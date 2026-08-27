@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Register{% endblock %}
+{% block content %}
+<section class="pad" style="margin-top:20px;">
+  <div class="panel" id="register-app" v-cloak style="margin:0;">
+    <h2>Register <span class="hint">註冊</span></h2>
+    <div class="field">
+      <label>Invite token</label>
+      <input v-model="token" v-on:change="checkInvite" required>
+      <p class="hint" v-if="inviteEmail">For: [[ inviteEmail ]]</p>
+      <p class="error-text" v-if="inviteError">[[ inviteError ]]</p>
+    </div>
+    <form v-on:submit.prevent="submit">
+      <div class="field-row">
+        <div class="field">
+          <label>Chinese name 中文姓名</label>
+          <input v-model="chineseName">
+        </div>
+        <div class="field">
+          <label>English name 英文姓名</label>
+          <input v-model="englishName">
+        </div>
+      </div>
+      <div class="field">
+        <label>Student ID 學號（8碼數字）</label>
+        <input class="student-id" v-model="studentId" pattern="[0-9]{8}" maxlength="8" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" v-model="password" minlength="8" required>
+      </div>
+      <p class="error-text" v-if="error">[[ error ]]</p>
+      <button type="submit" v-bind:disabled="busy || !inviteEmail">Register</button>
+    </form>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      token: {{ invite_token | tojson }},
+      inviteEmail: "", inviteError: "",
+      chineseName: "", englishName: "", studentId: "", password: "",
+      error: "", busy: false,
+    };
+  },
+  mounted() {
+    if (this.token) this.checkInvite();
+  },
+  methods: {
+    async checkInvite() {
+      this.inviteError = ""; this.inviteEmail = "";
+      if (!this.token) return;
+      try {
+        const info = await OIA.api.get("/api/auth/invite/" + encodeURIComponent(this.token));
+        this.inviteEmail = info.email;
+      } catch (e) {
+        this.inviteError = "Invite not found or already used.";
+      }
+    },
+    async submit() {
+      this.error = ""; this.busy = true;
+      try {
+        await OIA.api.post("/api/auth/register", {
+          token: this.token, chinese_name: this.chineseName, english_name: this.englishName,
+          student_id: this.studentId, password: this.password,
+        });
+        window.location.href = "/";
+      } catch (e) {
+        this.error = (e.payload && e.payload.message) || e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#register-app");
+</script>
+{% endblock %}

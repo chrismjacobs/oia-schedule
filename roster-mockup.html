@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>OIA Duty Roster · 值班表</title>
+<style>
+  :root{
+    /* Neutral chrome — the students are the only vivid colour */
+    --paper:#EEF0EF;
+    --card:#FBFCFB;
+    --ink:#1C2530;
+    --ink-2:#5A6672;
+    --ink-3:#8A96A2;
+    --rule:#D9DEDC;
+    --rule-2:#E8EBEA;
+    --accent:#2B4257;      /* single restrained interactive accent */
+    /* Status — reserved, kept clear of the student palette */
+    --warn:#B45309;        /* shortfall / no-show */
+    --warn-bg:#FBF1E3;
+    --open:#94A0A9;        /* uncovered */
+    --open-bg:#F1F3F2;
+    --ok:#4B7A63;          /* recorded ok, muted */
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    line-height:1.4;
+    padding:0 0 40px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,"SF Mono","Roboto Mono","Menlo",monospace;font-variant-numeric:tabular-nums}
+  .wrap{max-width:480px;margin:0 auto}
+
+  /* Header */
+  header{
+    position:sticky;top:0;z-index:5;
+    background:var(--paper);
+    padding:14px 16px 10px;
+    border-bottom:1px solid var(--rule);
+  }
+  .titlerow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .zh{font-size:19px;font-weight:700;letter-spacing:.02em}
+  .en{font-size:11px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.14em;margin-top:2px}
+  .mark{
+    font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--accent);
+    border:1px solid var(--accent);border-radius:3px;padding:3px 6px;white-space:nowrap;
+  }
+  .datebar{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .datebar .d{font-size:13px;font-weight:600}
+  .datebar .d .mono{font-size:13px}
+  .datebar .sub{font-size:11px;color:var(--ink-3)}
+
+  /* Tabs */
+  .tabs{display:flex;gap:4px;margin-top:12px;background:var(--rule-2);border-radius:8px;padding:3px}
+  .tab{
+    flex:1;text-align:center;font-size:13px;font-weight:600;color:var(--ink-2);
+    padding:7px 0;border-radius:6px;cursor:pointer;user-select:none;border:none;background:none;
+  }
+  .tab .zh-s{font-size:11px;color:inherit;opacity:.7;margin-left:4px}
+  .tab.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(20,30,40,.08)}
+
+  /* Summary strip */
+  .summary{
+    background:var(--card);margin:14px 16px 0;border:1px solid var(--rule);border-radius:12px;
+    padding:12px 14px;display:flex;gap:14px;
+  }
+  .stat{flex:1}
+  .stat .k{font-size:10px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.1em}
+  .stat .v{font-size:18px;font-weight:700;margin-top:3px}
+  .stat .v small{font-size:12px;font-weight:600;color:var(--ink-3)}
+  .stat.gap .v{color:var(--warn)}
+  .flags{display:flex;gap:6px;flex-wrap:wrap;margin:10px 16px 0}
+  .flag{
+    font-size:11px;font-weight:600;padding:4px 9px;border-radius:100px;display:flex;align-items:center;gap:5px;
+  }
+  .flag.warn{background:var(--warn-bg);color:var(--warn)}
+  .flag.open{background:var(--open-bg);color:#5D6B73}
+  .flag .dot{width:6px;height:6px;border-radius:50%}
+  .flag.warn .dot{background:var(--warn)}
+  .flag.open .dot{background:var(--open)}
+
+  section{padding:0 16px}
+  .view{display:none}
+  .view.on{display:block}
+
+  /* Day view — slot list on a time rail */
+  .daylabel{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.12em;margin:20px 0 8px}
+  .slot{
+    display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:12px;
+    background:var(--card);border:1px solid var(--rule);border-radius:11px;
+    padding:11px 13px;margin-bottom:7px;position:relative;
+  }
+  .slot.warn{border-left:3px solid var(--warn)}
+  .slot.open{background:var(--open-bg);border-style:dashed;border-color:#CBD3D0}
+  .time{font-size:13px;font-weight:600;color:var(--ink-2)}
+  .time .to{display:block;font-size:11px;color:var(--ink-3);font-weight:500}
+  .who{display:flex;align-items:center;gap:9px;min-width:0}
+  .name{min-width:0}
+  .name .n1{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .name .n2{font-size:11px;color:var(--ink-3)}
+  .status{text-align:right;white-space:nowrap}
+  .status .st{font-size:11px;font-weight:600}
+  .status.ok .st{color:var(--ok)}
+  .status.warn .st{color:var(--warn)}
+  .status .hrs{font-size:11px;color:var(--ink-3);margin-top:2px}
+  .status .hrs b{color:var(--ink-2);font-weight:600}
+  .fill-btn{
+    font-size:11px;font-weight:600;color:var(--accent);border:1px solid var(--accent);
+    background:none;border-radius:100px;padding:5px 12px;cursor:pointer;
+  }
+  .lunch{
+    text-align:center;font-size:11px;color:var(--ink-3);letter-spacing:.1em;
+    padding:6px 0;margin:2px 0;
+  }
+  .lunch span{background:var(--paper);padding:0 10px;position:relative}
+  .lunch::before{content:"";display:block;border-top:1px dashed var(--rule);position:relative;top:8px}
+
+  /* token (colour × shape) */
+  .tok{flex:none;width:26px;height:26px;display:grid;place-items:center}
+  .tok svg{width:26px;height:26px;display:block}
+
+  /* Week grid */
+  .weekwrap{margin-top:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    border:1px solid var(--rule);border-radius:12px;background:var(--card)}
+  table.grid{border-collapse:collapse;width:100%;min-width:420px}
+  table.grid th,table.grid td{border-bottom:1px solid var(--rule-2);border-right:1px solid var(--rule-2)}
+  table.grid th{font-size:11px;font-weight:600;color:var(--ink-2);padding:9px 4px;position:sticky;top:0;background:var(--card)}
+  table.grid th.h,table.grid td.h{
+    text-align:right;font-size:11px;color:var(--ink-3);padding-right:8px;white-space:nowrap;
+    position:sticky;left:0;background:var(--card);border-right:1px solid var(--rule);min-width:54px;
+  }
+  table.grid td{height:40px;text-align:center;padding:0}
+  table.grid td.empty{background:repeating-linear-gradient(45deg,transparent,transparent 5px,var(--open-bg) 5px,var(--open-bg) 10px)}
+  .cell-tok{display:inline-grid;place-items:center}
+  .cell-tok svg{width:19px;height:19px;display:block}
+  .weeknote{font-size:11px;color:var(--ink-3);margin:8px 2px 0;display:flex;align-items:center;gap:6px}
+
+  /* Roster / legend */
+  .roster{margin-top:22px}
+  .roster h3{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.12em;margin-bottom:10px}
+  .rlist{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .ritem{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:8px 10px}
+  .ritem .rn{min-width:0}
+  .ritem .rn .a{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ritem .rn .b{font-size:10px;color:var(--ink-3)}
+  .dupnote{grid-column:1/-1;font-size:11px;color:var(--ink-2);background:var(--warn-bg);border-radius:8px;padding:8px 10px;line-height:1.45}
+  .dupnote b{color:var(--warn)}
+
+  footer{text-align:center;font-size:10px;color:var(--ink-3);margin-top:26px;letter-spacing:.04em;padding:0 16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="titlerow">
+      <div>
+        <div class="zh">值班表</div>
+        <div class="en">Duty Roster</div>
+      </div>
+      <div class="mark">OIA · MCUT</div>
+    </div>
+    <div class="datebar">
+      <div class="d">週一 Mon <span class="mono">Sep 8</span></div>
+      <div class="sub">· 已鎖定 committed</div>
+    </div>
+    <div class="tabs">
+      <button class="tab on" data-v="day">Day<span class="zh-s">日</span></button>
+      <button class="tab" data-v="week">Week<span class="zh-s">週</span></button>
+    </div>
+  </header>
+
+  <!-- DAY -->
+  <div class="view on" id="day">
+    <div class="summary">
+      <div class="stat">
+        <div class="k">Coverage</div>
+        <div class="v">7<small>/8 slots</small></div>
+      </div>
+      <div class="stat">
+        <div class="k">Scheduled 排</div>
+        <div class="v mono">7<small>h</small></div>
+      </div>
+      <div class="stat gap">
+        <div class="k">Recorded 實到</div>
+        <div class="v mono">6<small>h</small></div>
+      </div>
+    </div>
+    <div class="flags">
+      <div class="flag warn"><span class="dot"></span>1 no-show · 11:00</div>
+      <div class="flag open"><span class="dot"></span>1 open · 15:00</div>
+    </div>
+
+    <section>
+      <div class="daylabel">Morning · 上午</div>
+
+      <div class="slot">
+        <div class="time mono">08:00<span class="to">09:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#0072B2" data-s="circle"></span>
+          <div class="name"><div class="n1">Wei-Chen</div><div class="n2">陳威辰 · 10912047</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+
+      <div class="slot">
+        <div class="time mono">09:00<span class="to">10:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#0072B2" data-s="circle"></span>
+          <div class="name"><div class="n1">Wei-Chen</div><div class="n2">陳威辰 · 續 continued</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+
+      <div class="slot">
+        <div class="time mono">10:00<span class="to">11:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#E69F00" data-s="triangle"></span>
+          <div class="name"><div class="n1">Sandy</div><div class="n2">林思妤 · 11024013</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+
+      <div class="slot warn">
+        <div class="time mono">11:00<span class="to">12:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#E69F00" data-s="triangle"></span>
+          <div class="name"><div class="n1">Sandy</div><div class="n2">林思妤 · scheduled</div></div>
+        </div>
+        <div class="status warn"><div class="st">Not signed in</div><div class="hrs">排 <b>1h</b> · 到 0h</div></div>
+      </div>
+
+      <div class="lunch"><span>12:00 – 13:00 · 午休 lunch</span></div>
+
+      <div class="daylabel">Afternoon · 下午</div>
+
+      <div class="slot">
+        <div class="time mono">13:00<span class="to">14:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#009E73" data-s="square"></span>
+          <div class="name"><div class="n1">Kevin</div><div class="n2">黃冠宇 · 10905162</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+
+      <div class="slot">
+        <div class="time mono">14:00<span class="to">15:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#D55E00" data-s="diamond"></span>
+          <div class="name"><div class="n1">Amy</div><div class="n2">張書瑋 · 11138009</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+
+      <div class="slot open">
+        <div class="time mono">15:00<span class="to">16:00</span></div>
+        <div class="who">
+          <div class="name"><div class="n1" style="color:#6B7780">Open slot · 空缺</div><div class="n2">freed by leave</div></div>
+        </div>
+        <button class="fill-btn">Advertise</button>
+      </div>
+
+      <div class="slot">
+        <div class="time mono">16:00<span class="to">17:00</span></div>
+        <div class="who">
+          <span class="tok" data-c="#7E57C2" data-s="circle"></span>
+          <div class="name"><div class="n1">Grace</div><div class="n2">李佳穎 · 11024088</div></div>
+        </div>
+        <div class="status ok"><div class="st">On shift</div><div class="hrs"><b>1h</b> recorded</div></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- WEEK -->
+  <div class="view" id="week">
+    <section>
+      <div class="weekwrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="h">時 / hr</th>
+              <th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th>
+            </tr>
+          </thead>
+          <tbody id="wk"></tbody>
+        </table>
+      </div>
+      <div class="weeknote">↔ scroll · colour + shape = one student at a glance</div>
+    </section>
+
+    <div class="roster">
+      <h3>Roster · 名冊</h3>
+      <div class="rlist" id="roster"></div>
+    </div>
+  </div>
+
+  <footer>Mockup · not live data · 8-digit student IDs shown for illustration</footer>
+</div>
+
+<script>
+// --- token shapes: colour is the fast scan, shape breaks ties & survives colourblindness ---
+function shapeSVG(color, shape){
+  const s = {
+    circle:  `<circle cx="12" cy="12" r="9"/>`,
+    triangle:`<path d="M12 3 L21 20 L3 20 Z"/>`,
+    square:  `<rect x="4" y="4" width="16" height="16" rx="2.5"/>`,
+    diamond: `<path d="M12 2.5 L21.5 12 L12 21.5 L2.5 12 Z"/>`
+  }[shape];
+  return `<svg viewBox="0 0 24 24" fill="${color}" stroke="rgba(0,0,0,.14)" stroke-width="1">${s}</svg>`;
+}
+document.querySelectorAll('.tok').forEach(t=>{
+  t.innerHTML = shapeSVG(t.dataset.c, t.dataset.s);
+});
+
+// --- roster (note the two blues, split by shape, to show duplicate handling) ---
+const people = [
+  {a:'Wei-Chen', b:'陳威辰', c:'#0072B2', s:'circle'},
+  {a:'Sandy',    b:'林思妤', c:'#E69F00', s:'triangle'},
+  {a:'Kevin',    b:'黃冠宇', c:'#009E73', s:'square'},
+  {a:'Amy',      b:'張書瑋', c:'#D55E00', s:'diamond'},
+  {a:'Grace',    b:'李佳穎', c:'#7E57C2', s:'circle'},
+  {a:'Ethan',    b:'吳承恩', c:'#0EA5A5', s:'triangle'},
+  {a:'Emma',     b:'王詩涵', c:'#C2185B', s:'square'},
+  {a:'Leo',      b:'周宥廷', c:'#8D6E63', s:'diamond'},
+  {a:'Ryan',     b:'蔡孟儒', c:'#0072B2', s:'triangle'} // reuses blue → shape differs
+];
+const rosterEl = document.getElementById('roster');
+people.forEach(p=>{
+  const d = document.createElement('div');
+  d.className='ritem';
+  d.innerHTML = `<span class="tok" style="width:24px;height:24px">${shapeSVG(p.c,p.s)}</span>
+    <div class="rn"><div class="a">${p.a}</div><div class="b">${p.b}</div></div>`;
+  rosterEl.appendChild(d);
+});
+const note = document.createElement('div');
+note.className='dupnote';
+note.innerHTML = `<b>Wei-Chen ●</b> and <b>Ryan ▲</b> share blue — the shape keeps them apart. Colours are spent first; shape only kicks in past 8 students.`;
+rosterEl.appendChild(note);
+
+// --- week grid (illustrative; some open cells hatched) ---
+const hours = ['08:00','09:00','10:00','11:00','13:00','14:00','15:00','16:00'];
+// per hour, 5 weekday assignments (index into people, or null = open)
+const wkData = [
+  [0,0,4,1,2],
+  [0,5,4,1,2],
+  [1,5,3,8,6],
+  [1,3,3,8,6],
+  [2,3,7,0,4],
+  [3,6,7,0,4],
+  [null,6,5,1,null],
+  [4,2,5,1,7]
+];
+const wk = document.getElementById('wk');
+hours.forEach((h,ri)=>{
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td class="h mono">${h}</td>`;
+  wkData[ri].forEach(pi=>{
+    const td = document.createElement('td');
+    if(pi===null){ td.className='empty'; }
+    else{
+      const p = people[pi];
+      td.innerHTML = `<span class="cell-tok">${shapeSVG(p.c,p.s)}</span>`;
+    }
+    tr.appendChild(td);
+  });
+  wk.appendChild(tr);
+});
+
+// --- tabs ---
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+    tab.classList.add('on');
+    document.getElementById(tab.dataset.v).classList.add('on');
+    window.scrollTo({top:0,behavior:'smooth'});
+  });
+});
+</script>
+</body>
+</html>

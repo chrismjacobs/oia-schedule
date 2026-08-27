@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div id="dash-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <div class="field" style="max-width:260px;">
+      <label>Month 月份</label>
+      <select v-model.number="monthId">
+        <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] ([[ m.state ]])</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="pad" v-if="loading"><p class="hint">Loading…</p></section>
+
+  <template v-if="data && !loading">
+    <div class="summary">
+      <div class="stat">
+        <div class="k">Coverage 覆蓋率</div>
+        <div class="v">[[ data.coverage_pct ]]<small>%</small></div>
+      </div>
+      <div class="stat gap">
+        <div class="k">Uncovered 未填補</div>
+        <div class="v mono">[[ data.uncovered_slots.length ]]</div>
+      </div>
+      <div class="stat gap">
+        <div class="k">No-shows 未到班</div>
+        <div class="v mono">[[ data.no_shows.length ]]</div>
+      </div>
+      <div class="stat gap">
+        <div class="k">Not scheduled 未排班卻簽到</div>
+        <div class="v mono">[[ data.signed_in_not_scheduled.length ]]</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Scheduled vs Recorded <span class="hint">排班 vs 實際出勤</span></h2>
+      <div class="table-scroll">
+        <table class="data">
+          <thead><tr><th></th><th>Scheduled</th><th>Recorded</th><th>Gap</th></tr></thead>
+          <tbody>
+            <tr v-for="row in data.gap" v-bind:key="row.student_id">
+              <td>[[ studentLabel(row) ]]</td>
+              <td class="mono">[[ row.scheduled_hours ]]</td>
+              <td class="mono">[[ row.recorded_hours ]]</td>
+              <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Leave patterns <span class="hint">請假頻繁 / 過晚</span></h2>
+      <p class="hint" v-if="!data.leave_patterns.too_often.length && !data.leave_patterns.too_late.length">None</p>
+      <ul v-else style="padding-left:18px;">
+        <li v-for="row in data.leave_patterns.too_often" v-bind:key="'often-'+row.student_id">
+          Too often: student #[[ row.student_id ]] — [[ row.count ]]x
+        </li>
+        <li v-for="row in data.leave_patterns.too_late" v-bind:key="'late-'+row.leave_request.id">
+          Too late: student #[[ row.student_id ]] — [[ row.leave_request.lead_time_hours ]]h notice
+        </li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2>Task completion <span class="hint">任務完成情形</span></h2>
+      <div class="table-scroll">
+        <table class="data">
+          <thead><tr><th>Task</th><th>Completions this month</th></tr></thead>
+          <tbody>
+            <tr v-for="row in data.task_completion.regular" v-bind:key="row.task.id">
+              <td>[[ row.task.title_zh ]] <span v-if="row.task.title_en">/ [[ row.task.title_en ]]</span></td>
+              <td class="mono">[[ row.completions_this_month ]]</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:8px;">Custom tasks: [[ JSON.stringify(data.task_completion.custom_by_status) ]]</p>
+    </div>
+  </template>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { months: [], monthId: null, data: null, loading: false };
+  },
+  watch: { monthId() { this.load(); } },
+  async mounted() {
+    this.months = await OIA.api.get("/api/admin/months");
+    if (this.months.length) {
+      const preferred = this.months.find(m => m.state === "running") || this.months[0];
+      this.monthId = preferred.id;
+    }
+  },
+  methods: {
+    async load() {
+      if (!this.monthId) return;
+      this.loading = true;
+      try {
+        this.data = await OIA.api.get("/api/dashboard/months/" + this.monthId);
+      } finally {
+        this.loading = false;
+      }
+    },
+    studentLabel(row) {
+      if (!row.student) return "#" + row.student_id;
+      return OIA.bilingual(row.student.chinese_name, row.student.english_name);
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#dash-app");
+</script>
+{% endblock %}

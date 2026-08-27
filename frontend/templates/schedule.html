@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}My Schedule{% endblock %}
+{% block content %}
+<div id="sched-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>My Schedule <span class="hint">我的班表</span></h2>
+    <p v-if="loading" class="hint">Loading…</p>
+    <p v-else-if="!rows.length" class="hint">No shifts scheduled yet.</p>
+    <div class="table-scroll" v-else>
+      <table class="data">
+        <thead><tr><th>Date</th><th>Hour</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr v-for="r in rows" v-bind:key="r.id">
+            <td class="mono">[[ r.slot.date ]]</td>
+            <td class="mono">[[ r.slot.hour ]]:00</td>
+            <td>[[ r.source ]]</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() { return { rows: [], loading: true }; },
+  async mounted() {
+    try { this.rows = await OIA.api.get("/api/schedule/mine"); }
+    finally { this.loading = false; }
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#sched-app");
+</script>
+{% endblock %}

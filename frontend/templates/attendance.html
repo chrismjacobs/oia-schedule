@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Sign in/out{% endblock %}
+{% block content %}
+<div id="att-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Sign in / out <span class="hint">簽到退</span></h2>
+    <p v-if="loading" class="hint">Loading…</p>
+
+    <template v-else-if="today">
+      <div class="panel" v-if="!today.scheduled_slots.length">No shifts scheduled today. 今天沒有排班</div>
+
+      <div class="panel" v-if="!today.open_session && today.scheduled_slots.length">
+        <p>Today's shifts:
+          <span class="mono" v-for="s in today.scheduled_slots" v-bind:key="s.id" style="margin-right:8px;">[[ s.hour ]]:00</span>
+        </p>
+        <button v-bind:disabled="busy || !today.scheduled_slots.some(s => s.sign_in_open)" v-on:click="signIn">Sign in 簽到</button>
+        <p class="hint" v-if="!today.scheduled_slots.some(s => s.sign_in_open)">Sign-in opens 10 minutes before your first shift.</p>
+      </div>
+
+      <div class="panel" v-if="today.open_session">
+        <span class="badge ok">Currently signed in 在班中</span>
+        <div v-for="s in today.scheduled_slots" v-bind:key="s.id" style="margin:14px 0; padding-bottom:14px; border-bottom:1px solid var(--rule);">
+          <strong class="mono">[[ s.hour ]]:00</strong>
+          <div class="field">
+            <label>What you did 工作紀錄</label>
+            <textarea rows="2" v-model="reportRows[s.id].note"></textarea>
+          </div>
+
+          <div v-if="tasks.regular_tasks.length">
+            <label>Regular tasks 例行任務</label>
+            <div v-for="rt in tasks.regular_tasks" v-bind:key="rt.id" style="margin-bottom:6px;">
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+                <input type="checkbox" v-model="reportRows[s.id].regular[rt.id]" style="width:auto;">
+                [[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
+                <span class="badge warn" v-if="rt.photo_required">photo required</span>
+              </label>
+              <div v-if="reportRows[s.id].regular[rt.id] && rt.reference_s3_key" style="margin:4px 0 4px 24px;">
+                <button class="secondary" type="button" v-on:click="viewReference('regular', rt.id)">View reference photo</button>
+              </div>
+              <div v-if="reportRows[s.id].regular[rt.id]" style="margin-left:24px;">
+                <input type="file" accept="image/*" v-on:change="onProofFile($event, 'regular', s.id, rt.id)">
+              </div>
+            </div>
+          </div>
+
+          <div v-if="tasks.custom_tasks.length">
+            <label>Custom tasks 自訂任務</label>
+            <div v-for="ct in tasks.custom_tasks" v-bind:key="ct.id" style="margin-bottom:6px;">
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+                <input type="checkbox" v-model="reportRows[s.id].custom[ct.id]" style="width:auto;">
+                [[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
+                <span class="badge warn" v-if="ct.photo_required">photo required</span>
+              </label>
+              <div v-if="reportRows[s.id].custom[ct.id] && ct.reference_s3_key" style="margin:4px 0 4px 24px;">
+                <button class="secondary" type="button" v-on:click="viewReference('custom', ct.id)">View reference photo</button>
+              </div>
+              <div v-if="reportRows[s.id].custom[ct.id]" style="margin-left:24px;">
+                <input type="file" accept="image/*" v-on:change="onProofFile($event, 'custom', s.id, ct.id)">
+              </div>
+            </div>
+          </div>
+        </div>
+        <button v-bind:disabled="busy" v-on:click="signOut">Sign out 簽退</button>
+      </div>
+      <p class="hint" style="margin:0 16px;">[[ message ]]</p>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { today: null, tasks: { regular_tasks: [], custom_tasks: [] }, reportRows: {}, proofFiles: {}, loading: true, busy: false, message: "" };
+  },
+  async mounted() { await this.load(); },
+  methods: {
+    async load() {
+      this.loading = true;
+      try {
+        this.today = await OIA.api.get("/api/attendance/today");
+        if (this.today.open_session) {
+          this.tasks = await OIA.api.get("/api/attendance/tasks");
+          this.today.scheduled_slots.forEach(s => {
+            if (!this.reportRows[s.id]) this.reportRows[s.id] = { note: "", regular: {}, custom: {} };
+          });
+        }
+      } finally {
+        this.loading = false;
+      }
+    },
+    async signIn() {
+      this.busy = true; this.message = "";
+      try { await OIA.api.post("/api/attendance/sign-in"); await this.load(); }
+      catch (e) { this.message = e.message; }
+      finally { this.busy = false; }
+    },
+    onProofFile(evt, kind, slotId, taskId) {
+      const file = evt.target.files[0];
+      this.proofFiles[kind + "_" + slotId + "_" + taskId] = file || null;
+    },
+    async viewReference(kind, taskId) {
+      const path = kind === "regular"
+        ? "/api/tasks/regular/" + taskId + "/reference-photo-url"
+        : "/api/tasks/custom/" + taskId + "/reference-photo-url";
+      try {
+        const res = await OIA.api.get(path);
+        window.open(res.url, "_blank");
+      } catch (e) {
+        alert("No reference photo set for this task.");
+      }
+    },
+    async stagePhoto(file) {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await OIA.api.post("/api/attendance/upload-proof-photo", form);
+      return res.s3_key;
+    },
+    async signOut() {
+      this.busy = true; this.message = "";
+      try {
+        const reports = [];
+        for (const s of this.today.scheduled_slots) {
+          const row = this.reportRows[s.id];
+          const regular_task_ids = [];
+          for (const [taskId, checked] of Object.entries(row.regular)) {
+            if (!checked) continue;
+            const file = this.proofFiles["regular_" + s.id + "_" + taskId];
+            const proof_s3_key = file ? await this.stagePhoto(file) : null;
+            regular_task_ids.push(proof_s3_key ? { id: Number(taskId), proof_s3_key } : Number(taskId));
+          }
+          const custom_task_ids = [];
+          for (const [taskId, checked] of Object.entries(row.custom)) {
+            if (!checked) continue;
+            const file = this.proofFiles["custom_" + s.id + "_" + taskId];
+            const proof_s3_key = file ? await this.stagePhoto(file) : null;
+            custom_task_ids.push(proof_s3_key ? { id: Number(taskId), proof_s3_key } : Number(taskId));
+          }
+          reports.push({ slot_id: s.id, note: row.note, regular_task_ids, custom_task_ids });
+        }
+        const res = await OIA.api.post("/api/attendance/sign-out", { session_id: this.today.open_session.id, reports });
+        this.message = res.skipped && res.skipped.length ? "Signed out — some tasks need a photo to count as done." : "Signed out.";
+        await this.load();
+      } catch (e) {
+        this.message = e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#att-app");
+</script>
+{% endblock %}

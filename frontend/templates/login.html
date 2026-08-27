@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<section class="pad" style="margin-top:20px;">
+  <div class="panel" id="login-app" v-cloak style="margin:0;">
+    <h2>Log in <span class="hint">登入</span></h2>
+    <form v-on:submit.prevent="submit">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" v-model="email" required autofocus>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" v-model="password" required>
+      </div>
+      <p class="error-text" v-if="error">[[ error ]]</p>
+      <button type="submit" v-bind:disabled="busy">Log in</button>
+    </form>
+    <p class="hint" style="margin-top:14px;">Have an invite link? <a href="/register">Register here</a>.</p>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { email: "", password: "", error: "", busy: false };
+  },
+  methods: {
+    async submit() {
+      this.error = "";
+      this.busy = true;
+      try {
+        await OIA.api.post("/api/auth/login", { email: this.email, password: this.password });
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = params.get("next") || "/";
+      } catch (e) {
+        this.error = "Login failed — check email/password. 登入失敗";
+      } finally {
+        this.busy = false;
+      }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#login-app");
+</script>
+{% endblock %}

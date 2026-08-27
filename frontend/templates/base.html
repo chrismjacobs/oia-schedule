@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>{% block title %}OIA Duty Roster{% endblock %} · 值班表</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+
+{% if current_user.is_authenticated %}
+<div class="drawer-backdrop" data-drawer-backdrop></div>
+<nav class="drawer" data-drawer aria-label="Main navigation">
+  <button class="close-drawer" data-drawer-close aria-label="Close menu">&times;</button>
+  <h4>OIA · MCUT</h4>
+  {% if current_user.role == 'overseer' %}
+    <a href="/day" class="{{ 'active' if active_nav == 'day' }}">Day <span class="hint">當日</span></a>
+    <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Week <span class="hint">週表</span></a>
+    <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard <span class="hint">總覽</span></a>
+    <a href="/draft" class="{{ 'active' if active_nav == 'draft' }}">Draft review <span class="hint">草案審閱</span></a>
+    <a href="/setup" class="{{ 'active' if active_nav == 'setup' }}">Roster / Setup <span class="hint">名冊設定</span></a>
+    <h4>Shared</h4>
+    <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave <span class="hint">請假</span></a>
+    <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks <span class="hint">任務</span></a>
+    <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards <span class="hint">工時卡</span></a>
+  {% else %}
+    <a href="/availability" class="{{ 'active' if active_nav == 'availability' }}">Availability <span class="hint">選填時段</span></a>
+    <a href="/schedule" class="{{ 'active' if active_nav == 'schedule' }}">My Schedule <span class="hint">我的班表</span></a>
+    <a href="/attendance" class="{{ 'active' if active_nav == 'attendance' }}">Sign in/out <span class="hint">簽到退</span></a>
+    <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave <span class="hint">請假</span></a>
+    <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks <span class="hint">任務</span></a>
+    <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards <span class="hint">工時卡</span></a>
+  {% endif %}
+</nav>
+{% endif %}
+
+<div class="wrap {{ 'wide' if wide_page }}">
+  <header class="app-header">
+    <div class="titlerow">
+      <div style="display:flex; align-items:center; gap:8px;">
+        {% if current_user.is_authenticated %}
+        <button class="hamburger" data-hamburger aria-label="Open menu"><span></span><span></span><span></span></button>
+        {% endif %}
+        <div class="brand-text">
+          <div class="zh">值班表</div>
+          <div class="en">Duty Roster</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="lang-toggle">
+          <button data-lang-btn="zh">中</button>
+          <button data-lang-btn="en">EN</button>
+        </div>
+        {% if current_user.is_authenticated %}
+        <div class="userline">
+          {{ current_user.email }}<br><span class="role">{{ current_user.role }}</span>
+        </div>
+        <button class="linklike" data-logout>Log out</button>
+        {% endif %}
+        <div class="mark">OIA · MCUT</div>
+      </div>
+    </div>
+    {% if current_user.is_authenticated %}
+    <nav class="inline-nav" aria-label="Main navigation">
+      {% if current_user.role == 'overseer' %}
+        <a href="/day" class="{{ 'active' if active_nav == 'day' }}">Day</a>
+        <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Week</a>
+        <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard</a>
+        <a href="/draft" class="{{ 'active' if active_nav == 'draft' }}">Draft</a>
+        <a href="/setup" class="{{ 'active' if active_nav == 'setup' }}">Setup</a>
+        <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave</a>
+        <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks</a>
+        <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards</a>
+      {% else %}
+        <a href="/availability" class="{{ 'active' if active_nav == 'availability' }}">Availability</a>
+        <a href="/schedule" class="{{ 'active' if active_nav == 'schedule' }}">My Schedule</a>
+        <a href="/attendance" class="{{ 'active' if active_nav == 'attendance' }}">Sign in/out</a>
+        <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave</a>
+        <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks</a>
+        <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards</a>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </header>
+
+  <div id="page-root">
+    {% block content %}{% endblock %}
+  </div>
+
+  <footer class="app-footer">OIA Duty Roster · MCUT</footer>
+</div>
+
+<script>
+  window.CURRENT_USER = {{ (current_user.to_dict() if current_user.is_authenticated else None) | tojson }};
+</script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+{% block page_script %}{% endblock %}
+</body>
+</html>

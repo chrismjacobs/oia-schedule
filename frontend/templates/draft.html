@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Draft review{% endblock %}
+{% block content %}
+<div id="draft-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <div class="field-row" style="align-items:end;">
+      <div class="field" style="max-width:260px;">
+        <label>Month 月份</label>
+        <select v-model.number="monthId">
+          <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] ([[ m.state ]])</option>
+        </select>
+      </div>
+      <button v-bind:disabled="busy" v-on:click="generateDraft">Generate draft 產生草案</button>
+      <button v-bind:disabled="busy || !payload || (payload.schedule && payload.schedule.status === 'committed')" v-on:click="commit">Commit 確認排班</button>
+    </div>
+    <p class="hint">[[ message ]]</p>
+  </section>
+
+  <section class="pad" v-if="payload">
+    <div class="table-scroll">
+      <table class="data">
+        <thead><tr><th>Date</th><th>Hour</th><th>Assigned</th></tr></thead>
+        <tbody>
+          <tr v-for="row in payload.slots" v-bind:key="row.slot.id" v-bind:class="{ 'cell-uncovered': !row.assignment }">
+            <td class="mono">[[ row.slot.date ]]</td>
+            <td class="mono">[[ row.slot.hour ]]:00</td>
+            <td>
+              <select v-bind:value="row.assignment ? row.assignment.student_id : ''" v-on:change="changeAssignment(row, $event.target.value)">
+                <option value="">Unassigned 未指派</option>
+                <option v-for="sid in row.eligible_student_ids" v-bind:key="sid" v-bind:value="sid">[[ studentName(sid) ]]</option>
+              </select>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { months: [], monthId: null, payload: null, busy: false, message: "" };
+  },
+  watch: { monthId() { this.loadPayload(); } },
+  async mounted() {
+    this.months = await OIA.api.get("/api/admin/months");
+    const preferred = this.months.find(m => m.state === "review") || this.months[0];
+    if (preferred) this.monthId = preferred.id;
+  },
+  methods: {
+    async loadPayload() {
+      if (!this.monthId) return;
+      this.payload = await OIA.api.get("/api/schedule/months/" + this.monthId);
+    },
+    async generateDraft() {
+      this.busy = true; this.message = "";
+      try {
+        const res = await OIA.api.post("/api/schedule/months/" + this.monthId + "/generate-draft");
+        this.message = "Solver: " + res.meta.status + ", assigned " + res.meta.assigned + "/" + res.meta.total_slots;
+        this.months = await OIA.api.get("/api/admin/months");
+        await this.loadPayload();
+      } catch (e) {
+        this.message = e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+    async changeAssignment(row, newStudentId) {
+      if (row.assignment) {
+        await OIA.api.patch("/api/schedule/assignments/" + row.assignment.id, { student_id: newStudentId === "" ? null : Number(newStudentId) });
+      } else if (newStudentId !== "") {
+        await OIA.api.post("/api/schedule/months/" + this.monthId + "/assignments", { slot_id: row.slot.id, student_id: Number(newStudentId) });
+      }
+      await this.loadPayload();
+    },
+    async commit() {
+      this.busy = true; this.message = "";
+      try {
+        await OIA.api.post("/api/schedule/months/" + this.monthId + "/commit");
+        this.message = "Committed.";
+        this.months = await OIA.api.get("/api/admin/months");
+      } catch (e) {
+        this.message = e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+    studentName(id) {
+      const s = this.payload.students[id];
+      return s ? (s.english_name || s.chinese_name) : ("#" + id);
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#draft-app");
+</script>
+{% endblock %}

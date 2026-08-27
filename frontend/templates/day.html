@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Day{% endblock %}
+{% block content %}
+<div id="day-app" v-cloak>
+  <div class="datebar" style="padding:0 16px; display:flex; align-items:center; gap:8px; margin-top:6px;">
+    <div class="d">
+      <span class="mono">[[ dateLabel ]]</span>
+    </div>
+    <button class="linklike" v-on:click="shift(-1)">&larr;</button>
+    <button class="linklike" v-on:click="shift(1)">&rarr;</button>
+    <input type="date" v-model="date" style="width:auto; margin-left:auto;">
+  </div>
+
+  <div class="summary" v-if="!loading">
+    <div class="stat">
+      <div class="k">Coverage</div>
+      <div class="v">[[ assignedCount ]]<small>/[[ slots.length ]] slots</small></div>
+    </div>
+    <div class="stat">
+      <div class="k">Scheduled 排</div>
+      <div class="v mono">[[ assignedCount ]]<small>h</small></div>
+    </div>
+    <div class="stat gap">
+      <div class="k">Recorded 實到</div>
+      <div class="v mono">[[ recordedCount ]]<small>h</small></div>
+    </div>
+  </div>
+
+  <div class="flags" v-if="!loading">
+    <div class="flag warn" v-if="noShowSlots.length">
+      <span class="dot"></span>[[ noShowSlots.length ]] no-show · [[ noShowSlots[0].slot.hour ]]:00
+    </div>
+    <div class="flag open" v-if="openSlots.length">
+      <span class="dot"></span>[[ openSlots.length ]] open · [[ openSlots[0].slot.hour ]]:00
+    </div>
+  </div>
+
+  <section class="pad">
+    <p v-if="loading" class="hint" style="margin-top:20px;">Loading…</p>
+    <p v-else-if="!slots.length" class="hint" style="margin-top:20px;">No slots this day (weekend or closed date).</p>
+
+    <template v-for="(row, idx) in slots" v-bind:key="row.slot.id">
+      <div class="daylabel" v-if="idx === 0">Morning · 上午</div>
+      <div class="lunch" v-if="row.slot.hour === 13 && idx > 0"><span>12:00 – 13:00 · 午休 lunch</span></div>
+      <div class="daylabel" v-if="row.slot.hour === 13">Afternoon · 下午</div>
+
+      <div class="slot" v-bind:class="{ warn: row.status === 'flagged', open: row.status === 'uncovered' }">
+        <div class="time mono">[[ row.slot.hour ]]:00<span class="to">[[ row.slot.hour + 1 ]]:00</span></div>
+
+        <div class="who" v-if="row.student">
+          <oia-token v-bind:student="row.student"></oia-token>
+          <div class="name">
+            <div class="n1">[[ row.student.english_name || row.student.chinese_name ]]</div>
+            <div class="n2">[[ row.student.chinese_name ]] · [[ row.student.student_id ]]</div>
+          </div>
+        </div>
+        <div class="who" v-else>
+          <div class="name"><div class="n1" style="color:#6B7780">Open slot · 空缺</div><div class="n2">uncovered</div></div>
+        </div>
+
+        <div class="status" v-bind:class="{ ok: row.status === 'recorded', warn: row.status === 'flagged' }" v-if="row.student">
+          <div class="st" v-if="row.status === 'recorded'">On shift</div>
+          <div class="st" v-else-if="row.status === 'flagged'">Not signed in</div>
+          <div class="st" v-else>Scheduled</div>
+          <div class="hrs" v-if="row.status === 'recorded'"><b>1h</b> recorded</div>
+          <div class="hrs" v-else-if="row.status === 'flagged'">排 <b>1h</b> · 到 0h</div>
+        </div>
+        <button class="fill-btn" v-else>Advertise</button>
+      </div>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      date: {{ (initial_date or '') | tojson }} || new Date().toISOString().slice(0, 10),
+      slots: [], loading: true,
+    };
+  },
+  computed: {
+    dateLabel() {
+      const d = new Date(this.date + "T00:00:00");
+      return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    },
+    assignedCount() { return this.slots.filter(r => r.assignment).length; },
+    recordedCount() { return this.slots.filter(r => r.status === "recorded").length; },
+    noShowSlots() { return this.slots.filter(r => r.status === "flagged"); },
+    openSlots() { return this.slots.filter(r => r.status === "uncovered"); },
+  },
+  watch: { date() { this.load(); } },
+  mounted() { this.load(); },
+  methods: {
+    async load() {
+      this.loading = true;
+      try {
+        const res = await OIA.api.get("/api/dashboard/day/" + this.date);
+        this.slots = res.slots;
+      } finally {
+        this.loading = false;
+      }
+    },
+    shift(days) {
+      const d = new Date(this.date + "T00:00:00");
+      d.setDate(d.getDate() + days);
+      this.date = d.toISOString().slice(0, 10);
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#day-app");
+</script>
+{% endblock %}

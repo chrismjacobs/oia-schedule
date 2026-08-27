@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Availability{% endblock %}
+{% block content %}
+<div id="avail-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Select your available hours <span class="hint">選填可上班時段</span></h2>
+
+    <p v-if="loading" class="hint">Loading…</p>
+    <div class="panel" v-else-if="!month">No month is currently open for selection.</div>
+    <template v-else>
+      <p class="hint" v-if="!windowOpen">Selection window is closed 選填時段目前未開放</p>
+      <p>[[ selected.size ]] hours selected</p>
+
+      <div class="weekwrap">
+        <table class="grid">
+          <thead><tr><th class="h"></th><th v-for="d in dates" v-bind:key="d">[[ d.slice(5) ]]</th></tr></thead>
+          <tbody>
+            <tr v-for="h in HOURS" v-bind:key="h">
+              <td class="h mono">[[ h ]]:00</td>
+              <td v-for="d in dates" v-bind:key="d+'_'+h"
+                  v-bind:style="isSelected(d,h) ? { background: 'var(--accent)' } : {}"
+                  v-bind:class="{ empty: !isSelected(d,h) }"
+                  style="cursor:pointer;"
+                  v-on:click="toggle(d,h)">
+                <span v-if="isSelected(d,h)" style="color:#fff;">✓</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <button style="margin:14px 16px 0;" v-bind:disabled="!windowOpen || saving" v-on:click="save">Save my hours 儲存我的時段</button>
+      <p class="hint" style="margin:6px 16px 0;">[[ saveMsg ]]</p>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { month: null, slots: [], selected: new Set(), windowOpen: false, loading: true, saving: false, saveMsg: "", HOURS };
+  },
+  computed: {
+    dates() {
+      const seen = new Set(), out = [];
+      this.slots.forEach(s => { if (!seen.has(s.date)) { seen.add(s.date); out.push(s.date); } });
+      return out;
+    },
+    slotIndex() {
+      const map = {};
+      this.slots.forEach(s => { map[s.date + "_" + s.hour] = s; });
+      return map;
+    },
+  },
+  async mounted() {
+    this.loading = true;
+    try {
+      const current = await OIA.api.get("/api/availability/current");
+      if (!current) return;
+      this.month = current;
+      const res = await OIA.api.get("/api/availability/" + current.id);
+      this.slots = res.slots;
+      this.windowOpen = res.window_open;
+      this.selected = new Set(res.slots.filter(s => s.selected).map(s => s.id));
+    } finally {
+      this.loading = false;
+    }
+  },
+  methods: {
+    toggle(date, hour) {
+      if (!this.windowOpen) return;
+      const s = this.slotIndex[date + "_" + hour];
+      if (!s) return;
+      if (this.selected.has(s.id)) this.selected.delete(s.id); else this.selected.add(s.id);
+      this.selected = new Set(this.selected); // trigger reactivity
+    },
+    isSelected(date, hour) {
+      const s = this.slotIndex[date + "_" + hour];
+      return s && this.selected.has(s.id);
+    },
+    async save() {
+      this.saving = true; this.saveMsg = "";
+      try {
+        await OIA.api.put("/api/availability/" + this.month.id, { slot_ids: Array.from(this.selected) });
+        this.saveMsg = "Saved.";
+      } finally {
+        this.saving = false;
+      }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#avail-app");
+</script>
+{% endblock %}

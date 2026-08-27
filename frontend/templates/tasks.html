@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<div id="tasks-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Tasks <span class="hint">任務</span></h2>
+
+    <template v-if="isOverseer">
+      <div class="panel">
+        <h3>Regular tasks 例行任務</h3>
+        <table class="data">
+          <thead><tr><th>Title</th><th>Frequency</th><th>Active</th><th>Photo</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="rt in regular" v-bind:key="rt.id">
+              <td>[[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span></td>
+              <td>[[ rt.frequency ]] (every [[ rt.interval ]])</td>
+              <td>[[ rt.is_active ? 'yes' : 'no' ]]</td>
+              <td>[[ rt.photo_required ? 'required' : (rt.reference_s3_key ? 'reference set' : '—') ]]</td>
+              <td>
+                <button class="secondary" v-on:click="toggleRegularActive(rt)">[[ rt.is_active ? 'Deactivate' : 'Activate' ]]</button>
+                <label class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; cursor:pointer; font-size:12px;">
+                  Reference photo<input type="file" accept="image/*" style="display:none;" v-on:change="uploadReference($event, 'regular', rt.id)">
+                </label>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h4 style="margin-top:14px;">Add regular task</h4>
+        <form v-on:submit.prevent="addRegular" class="field-row">
+          <div class="field"><label>ZH title</label><input v-model="newRegular.title_zh" required></div>
+          <div class="field"><label>EN title</label><input v-model="newRegular.title_en"></div>
+          <div class="field"><label>Frequency</label>
+            <select v-model="newRegular.frequency">
+              <option value="daily">daily</option><option value="weekly">weekly</option><option value="monthly">monthly</option>
+            </select>
+          </div>
+          <div class="field"><label>Photo required?</label>
+            <select v-model="newRegular.photo_required">
+              <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+            </select>
+          </div>
+          <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h3>Custom tasks 自訂任務</h3>
+        <table class="data">
+          <thead><tr><th>Title</th><th>Status</th><th>Photo</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="ct in custom" v-bind:key="ct.id">
+              <td>[[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span></td>
+              <td><span class="badge" v-bind:class="{ ok: ct.status==='done', warn: ct.status==='open' }">[[ ct.status ]]</span></td>
+              <td>[[ ct.photo_required ? 'required' : (ct.reference_s3_key ? 'reference set' : '—') ]]</td>
+              <td>
+                <label class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; cursor:pointer; font-size:12px;">
+                  Reference photo<input type="file" accept="image/*" style="display:none;" v-on:change="uploadReference($event, 'custom', ct.id)">
+                </label>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h4 style="margin-top:14px;">Add custom task</h4>
+        <form v-on:submit.prevent="addCustom" class="field-row">
+          <div class="field"><label>ZH title</label><input v-model="newCustom.title_zh" required></div>
+          <div class="field"><label>EN title</label><input v-model="newCustom.title_en"></div>
+          <div class="field"><label>Photo required?</label>
+            <select v-model="newCustom.photo_required">
+              <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+            </select>
+          </div>
+          <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+        </form>
+      </div>
+    </template>
+
+    <template v-if="isStudent">
+      <div class="panel">
+        <h3>Custom tasks 自訂任務</h3>
+        <p class="hint" v-if="!custom.length">None open</p>
+        <div class="slot" v-for="ct in custom" v-bind:key="ct.id" style="margin-bottom:8px;">
+          <div></div>
+          <div class="name"><div class="n1">[[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span></div><div class="n2">[[ ct.description ]]</div></div>
+          <button v-on:click="claimCustom(ct.id)">Claim</button>
+        </div>
+      </div>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
+      isStudent: CURRENT_USER && CURRENT_USER.role === "student",
+      regular: [], custom: [],
+      newRegular: { title_zh: "", title_en: "", description: "", frequency: "weekly", interval: 1, photo_required: false },
+      newCustom: { title_zh: "", title_en: "", description: "", photo_required: false },
+      busy: false,
+    };
+  },
+  async mounted() { await this.load(); },
+  methods: {
+    async load() {
+      this.regular = this.isOverseer ? await OIA.api.get("/api/tasks/regular") : [];
+      this.custom = await OIA.api.get(this.isOverseer ? "/api/tasks/custom" : "/api/tasks/custom?status=open");
+    },
+    async addRegular() {
+      this.busy = true;
+      try {
+        await OIA.api.post("/api/tasks/regular", this.newRegular);
+        this.newRegular = { title_zh: "", title_en: "", description: "", frequency: "weekly", interval: 1, photo_required: false };
+        await this.load();
+      } finally { this.busy = false; }
+    },
+    async toggleRegularActive(rt) {
+      await OIA.api.patch("/api/tasks/regular/" + rt.id, { is_active: !rt.is_active });
+      await this.load();
+    },
+    async addCustom() {
+      this.busy = true;
+      try {
+        await OIA.api.post("/api/tasks/custom", this.newCustom);
+        this.newCustom = { title_zh: "", title_en: "", description: "", photo_required: false };
+        await this.load();
+      } finally { this.busy = false; }
+    },
+    async claimCustom(id) {
+      await OIA.api.post("/api/tasks/custom/" + id + "/claim");
+      await this.load();
+    },
+    async uploadReference(evt, kind, id) {
+      const file = evt.target.files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append("file", file);
+      const path = kind === "regular" ? "/api/tasks/regular/" + id + "/reference-photo" : "/api/tasks/custom/" + id + "/reference-photo";
+      await OIA.api.post(path, form);
+      await this.load();
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#tasks-app");
+</script>
+{% endblock %}

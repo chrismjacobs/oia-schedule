@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Timecards{% endblock %}
+{% block content %}
+<div id="tc-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Timecards <span class="hint">工時卡</span></h2>
+
+    <template v-if="isStudent">
+      <div class="panel">
+        <p class="hint">Upload cadence: [[ cadence ]]</p>
+        <form v-on:submit.prevent="upload" class="field-row">
+          <div class="field"><label>Period</label><input v-model="periodLabel" placeholder="2026-09" required></div>
+          <div class="field"><label>Photo</label><input type="file" accept="image/*" v-on:change="onFile" required></div>
+          <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Upload</button></div>
+        </form>
+        <p class="hint">[[ message ]]</p>
+      </div>
+      <div class="panel">
+        <table class="data">
+          <thead><tr><th>Period</th><th>Uploaded</th></tr></thead>
+          <tbody><tr v-for="u in uploads" v-bind:key="u.id"><td>[[ u.period_label ]]</td><td class="mono">[[ u.uploaded_at.slice(0,10) ]]</td></tr></tbody>
+        </table>
+      </div>
+    </template>
+
+    <template v-if="isOverseer">
+      <div class="panel">
+        <table class="data">
+          <thead><tr><th>Student</th><th>Period</th><th>Uploaded</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="u in adminUploads" v-bind:key="u.id">
+              <td class="mono">#[[ u.student_id ]]</td>
+              <td>[[ u.period_label ]]</td>
+              <td class="mono">[[ u.uploaded_at.slice(0,10) ]]</td>
+              <td><button class="secondary" v-on:click="viewUpload(u.id)">View</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      isStudent: CURRENT_USER && CURRENT_USER.role === "student",
+      isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
+      cadence: "", uploads: [], periodLabel: "", file: null, busy: false, message: "", adminUploads: [],
+    };
+  },
+  async mounted() {
+    if (this.isStudent) {
+      const res = await OIA.api.get("/api/timecards");
+      this.cadence = res.cadence; this.uploads = res.uploads;
+    }
+    if (this.isOverseer) this.adminUploads = await OIA.api.get("/api/timecards/admin");
+  },
+  methods: {
+    onFile(evt) { this.file = evt.target.files[0]; },
+    async upload() {
+      if (!this.file || !this.periodLabel) return;
+      this.busy = true; this.message = "";
+      try {
+        const form = new FormData();
+        form.append("file", this.file);
+        form.append("period_label", this.periodLabel);
+        await OIA.api.post("/api/timecards", form);
+        this.message = "Uploaded."; this.periodLabel = ""; this.file = null;
+        const res = await OIA.api.get("/api/timecards");
+        this.uploads = res.uploads;
+      } catch (e) {
+        this.message = e.message;
+      } finally { this.busy = false; }
+    },
+    async viewUpload(id) {
+      const res = await OIA.api.get("/api/timecards/" + id + "/url");
+      window.open(res.url, "_blank");
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#tc-app");
+</script>
+{% endblock %}

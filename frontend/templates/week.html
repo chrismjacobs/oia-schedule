@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Week{% endblock %}
+{% block content %}
+<div id="week-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <div class="field" style="max-width:260px;">
+      <label>Month 月份</label>
+      <select v-model.number="monthId">
+        <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] ([[ m.state ]])</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="pad" v-if="!payload"><p class="hint">Loading…</p></section>
+
+  <template v-else>
+    <div class="weekwrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="h">時 / hr</th>
+            <th v-for="d in dates" v-bind:key="d">[[ d.slice(5) ]]</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="h in HOURS" v-bind:key="h">
+            <td class="h mono">[[ h ]]:00</td>
+            <td v-for="d in dates" v-bind:key="d + '_' + h"
+                v-bind:class="{ empty: !cell(d, h) || !cell(d, h).assignment }">
+              <span class="cell-tok" v-if="cell(d, h) && cell(d, h).assignment">
+                <oia-token v-bind:student="studentFor(cell(d, h))"></oia-token>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="weeknote">↔ scroll · colour + shape = one student at a glance</div>
+
+    <div class="roster">
+      <h3>Roster · 名冊</h3>
+      <div class="rlist">
+        <div class="ritem" v-for="s in Object.values(payload.students)" v-bind:key="s.id">
+          <oia-token v-bind:student="s" size="sm"></oia-token>
+          <div class="rn">
+            <div class="a">[[ s.english_name || s.chinese_name ]]</div>
+            <div class="b">[[ s.chinese_name ]]</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return { months: [], monthId: null, payload: null, HOURS };
+  },
+  computed: {
+    dates() {
+      if (!this.payload) return [];
+      const seen = new Set(), out = [];
+      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); out.push(r.slot.date); } });
+      return out;
+    },
+    cellIndex() {
+      const map = {};
+      if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
+      return map;
+    },
+  },
+  watch: {
+    async monthId() {
+      if (!this.monthId) return;
+      this.payload = await OIA.api.get("/api/schedule/months/" + this.monthId);
+    },
+  },
+  async mounted() {
+    this.months = await OIA.api.get("/api/admin/months");
+    if (this.months.length) {
+      const preferred = this.months.find(m => m.state === "running") || this.months[0];
+      this.monthId = preferred.id;
+    }
+  },
+  methods: {
+    cell(date, hour) { return this.cellIndex[date + "_" + hour]; },
+    studentFor(row) {
+      return row.assignment ? this.payload.students[row.assignment.student_id] : null;
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#week-app");
+</script>
+{% endblock %}

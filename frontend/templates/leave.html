@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Leave{% endblock %}
+{% block content %}
+<div id="leave-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Leave <span class="hint">請假</span></h2>
+
+    <template v-if="isStudent">
+      <div class="panel">
+        <h3>Request leave 申請請假</h3>
+        <form v-on:submit.prevent="submitRequest">
+          <div class="field">
+            <label>Slot</label>
+            <select v-model="slotId" required>
+              <option v-for="a in mySlots" v-bind:key="a.slot.id" v-bind:value="a.slot.id">[[ a.slot.date ]] [[ a.slot.hour ]]:00</option>
+            </select>
+          </div>
+          <div class="field"><label>Reason</label><textarea v-model="reason" required rows="2"></textarea></div>
+          <button v-bind:disabled="busy" type="submit">Submit</button>
+        </form>
+        <p class="hint">[[ message ]]</p>
+      </div>
+
+      <div class="panel">
+        <h3>My requests</h3>
+        <table class="data">
+          <thead><tr><th>Slot</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr v-for="r in myRequests" v-bind:key="r.id">
+              <td class="mono">#[[ r.slot_id ]]</td>
+              <td><span class="badge" v-bind:class="{ ok: r.status==='approved', warn: r.status==='denied' }">[[ r.status ]]</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>Open (reopened) slots</h3>
+        <p class="hint" v-if="!reopened.length">None</p>
+        <div class="slot" v-for="r in reopened" v-bind:key="r.id" style="margin-bottom:8px;">
+          <div class="time mono">[[ r.slot.hour ]]:00<span class="to">[[ r.slot.date ]]</span></div>
+          <div></div>
+          <button v-on:click="claim(r.id)">Claim</button>
+        </div>
+      </div>
+    </template>
+
+    <template v-if="isOverseer">
+      <div class="panel">
+        <h3>Pending requests</h3>
+        <p class="hint" v-if="!adminRequests.length">None</p>
+        <table class="data" v-else>
+          <thead><tr><th>Student</th><th>Slot</th><th>Reason</th><th>Lead (h)</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="r in adminRequests" v-bind:key="r.id">
+              <td>[[ r.student.english_name || r.student.chinese_name ]]</td>
+              <td class="mono">[[ r.slot.date ]] [[ r.slot.hour ]]:00</td>
+              <td>[[ r.reason ]]</td>
+              <td class="mono">[[ r.lead_time_hours ]]</td>
+              <td>
+                <button v-on:click="decide(r.id, 'approved')">Approve</button>
+                <button class="danger" v-on:click="decide(r.id, 'denied')">Deny</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      isStudent: CURRENT_USER && CURRENT_USER.role === "student",
+      isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
+      mySlots: [], myRequests: [], reopened: [], adminRequests: [],
+      slotId: "", reason: "", busy: false, message: "",
+    };
+  },
+  async mounted() {
+    if (this.isStudent) await this.loadStudent();
+    if (this.isOverseer) await this.loadAdmin();
+  },
+  methods: {
+    async loadStudent() {
+      const [assignments, requests, open] = await Promise.all([
+        OIA.api.get("/api/schedule/mine"),
+        OIA.api.get("/api/leave"),
+        OIA.api.get("/api/leave/reopened"),
+      ]);
+      const today = new Date().toISOString().slice(0, 10);
+      this.mySlots = assignments.filter(a => a.slot.date >= today);
+      this.myRequests = requests;
+      this.reopened = open;
+    },
+    async loadAdmin() {
+      const [pending, open] = await Promise.all([
+        OIA.api.get("/api/leave/admin?status=pending"),
+        OIA.api.get("/api/leave/reopened"),
+      ]);
+      this.adminRequests = pending;
+      this.reopened = open;
+    },
+    async submitRequest() {
+      this.busy = true; this.message = "";
+      try {
+        await OIA.api.post("/api/leave", { slot_id: Number(this.slotId), reason: this.reason });
+        this.reason = ""; this.slotId = "";
+        await this.loadStudent();
+        this.message = "Request submitted.";
+      } catch (e) {
+        this.message = e.message;
+      } finally { this.busy = false; }
+    },
+    async claim(id) {
+      await OIA.api.post("/api/leave/reopened/" + id + "/claim");
+      await this.loadStudent();
+    },
+    async decide(id, status) {
+      await OIA.api.patch("/api/leave/admin/" + id, { status });
+      await this.loadAdmin();
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#leave-app");
+</script>
+{% endblock %}
