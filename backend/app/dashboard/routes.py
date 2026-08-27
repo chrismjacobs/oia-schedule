@@ -3,7 +3,7 @@ Surfaces: scheduled-vs-recorded gaps, no-shows, leave patterns, uncovered
 slots, task completion. All values here are derived, never stored
 (SCHEMA.md 'Derived values')."""
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta
 
 from flask import jsonify, request, current_app
 
