@@ -34,6 +34,7 @@ class EmailBackend(NotificationBackend):
 class LineBackend(NotificationBackend):
     """LINE Messaging API push to the student group (not LINE Notify)."""
     PUSH_URL = "https://api.line.me/v2/bot/message/push"
+    REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 
     def send(self, message: str, to: str = None):
         cfg = current_app.config
@@ -46,6 +47,20 @@ class LineBackend(NotificationBackend):
             self.PUSH_URL,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"to": target, "messages": [{"type": "text", "text": message}]},
+            timeout=10,
+        )
+        resp.raise_for_status()
+
+    def reply(self, reply_token: str, message: str):
+        """Reply API — free (no push quota used), only usable within the
+        webhook request/response window via a reply_token."""
+        token = current_app.config.get("LINE_TOKEN")
+        if not token:
+            return
+        resp = requests.post(
+            self.REPLY_URL,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"replyToken": reply_token, "messages": [{"type": "text", "text": message}]},
             timeout=10,
         )
         resp.raise_for_status()
