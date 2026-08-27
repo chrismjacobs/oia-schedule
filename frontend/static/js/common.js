@@ -82,6 +82,14 @@
     return zh || en || "";
   }
 
+  // "2026-09-08" -> "Mon". Built from y/m/d parts (not `new Date(str)`) so it's
+  // never off by a day due to the browser parsing the date as UTC midnight.
+  const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  function weekdayLabel(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return WEEKDAY_LABELS[new Date(y, m - 1, d).getDay()];
+  }
+
   // ---------------- colour x shape identity tokens ----------------
   function shapeSVG(color, shape) {
     const shapes = {
@@ -139,5 +147,5 @@
   }
   document.addEventListener("DOMContentLoaded", initHeader);
 
-  window.OIA = { api, t, getLang, setLang, bilingual, shapeSVG, registerGlobals };
+  window.OIA = { api, t, getLang, setLang, bilingual, shapeSVG, weekdayLabel, registerGlobals };
 })();

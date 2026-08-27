@@ -19,7 +19,7 @@
         <thead>
           <tr>
             <th class="h">時 / hr</th>
-            <th v-for="d in dates" v-bind:key="d">[[ d.slice(5) ]]</th>
+            <th v-for="d in dates" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
           </tr>
         </thead>
         <tbody>
@@ -89,6 +89,7 @@ const app = createApp({
   },
   methods: {
     cell(date, hour) { return this.cellIndex[date + "_" + hour]; },
+    weekdayLabel(date) { return OIA.weekdayLabel(date); },
     studentFor(row) {
       return row.assignment ? this.payload.students[row.assignment.student_id] : null;
     },

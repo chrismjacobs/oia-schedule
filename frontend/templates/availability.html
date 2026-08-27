@@ -13,7 +13,7 @@
 
       <div class="weekwrap">
         <table class="grid">
-          <thead><tr><th class="h"></th><th v-for="d in dates" v-bind:key="d">[[ d.slice(5) ]]</th></tr></thead>
+          <thead><tr><th class="h"></th><th v-for="d in dates" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th></tr></thead>
           <tbody>
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ h ]]:00</td>
@@ -81,6 +81,7 @@ const app = createApp({
       const s = this.slotIndex[date + "_" + hour];
       return s && this.selected.has(s.id);
     },
+    weekdayLabel(date) { return OIA.weekdayLabel(date); },
     async save() {
       this.saving = true; this.saveMsg = "";
       try {
