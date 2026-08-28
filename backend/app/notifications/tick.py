@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 from flask import current_app
 
 from app.extensions import db
-from app.models import Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession
-from app.notifications.service import notify_selection_open, notify_closing_warning, notify_no_show
+from app.models import Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession, ReopenedSlot
+from app.notifications.service import notify_selection_open, notify_closing_warning, notify_no_show, notify_slot_open
 from app.utils.tz import local_now
 
 
@@ -101,10 +101,52 @@ def _flag_forgotten_signouts(now):
     return {"forgot_signout_flagged": len(open_sessions)}
 
 
+def _auto_advertise_unfilled_slots(now):
+    """A committed slot nobody ever offered availability for stays uncovered
+    forever unless someone acts — auto-open it for FCFS claim once its date
+    is within ADVERTISE_LOOKAHEAD_DAYS, rather than waiting on the overseer
+    to notice and click Advertise manually. Approved-leave reopens and manual
+    advertises both create their own ReopenedSlot immediately, so this only
+    ever needs to catch slots that were never touched by either path."""
+    lookahead_date = now.date() + timedelta(days=current_app.config["ADVERTISE_LOOKAHEAD_DAYS"])
+    month_ids = [m.id for m in Month.query.filter(Month.state.in_(("committed", "running"))).all()]
+    if not month_ids:
+        return {"auto_advertised": 0}
+
+    schedules = Schedule.query.filter(Schedule.month_id.in_(month_ids), Schedule.status == "committed").all()
+    schedule_ids = [s.id for s in schedules]
+    if not schedule_ids:
+        return {"auto_advertised": 0}
+
+    assigned_slot_ids = {
+        a.slot_id for a in Assignment.query.filter(Assignment.schedule_id.in_(schedule_ids)).all()
+    }
+    already_reopened_slot_ids = {r.slot_id for r in ReopenedSlot.query.all()}
+
+    candidates = Slot.query.filter(
+        Slot.month_id.in_(month_ids), Slot.date >= now.date(), Slot.date <= lookahead_date,
+    ).all()
+
+    advertised = 0
+    for slot in candidates:
+        if slot.id in assigned_slot_ids or slot.id in already_reopened_slot_ids:
+            continue
+        slot.state = "reopened"
+        reopened = ReopenedSlot(slot_id=slot.id, source="auto_unfilled", opened_at=now)
+        db.session.add(reopened)
+        db.session.flush()
+        notify_slot_open(reopened)
+        advertised += 1
+    if advertised:
+        db.session.commit()
+    return {"auto_advertised": advertised}
+
+
 def run_tick():
     now = local_now()
     result = {"ran_at": now.isoformat()}
     result.update(_auto_advance_selection_windows(now))
     result.update(_check_no_shows(now))
     result.update(_flag_forgotten_signouts(now))
+    result.update(_auto_advertise_unfilled_slots(now))
     return result

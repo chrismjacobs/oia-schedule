@@ -1,4 +1,3 @@
-
 from flask import jsonify, request
 from flask_login import current_user
 
@@ -95,7 +94,7 @@ def decide_leave(leave_id):
         if assignment:
             db.session.delete(assignment)
         lr.slot.state = "reopened"
-        reopened = ReopenedSlot(slot_id=lr.slot_id, leave_request_id=lr.id, opened_at=local_now())
+        reopened = ReopenedSlot(slot_id=lr.slot_id, leave_request_id=lr.id, source="leave", opened_at=local_now())
         db.session.add(reopened)
         db.session.flush()
         db.session.commit()
@@ -106,16 +105,53 @@ def decide_leave(leave_id):
     return jsonify(lr.to_dict())
 
 
+def _open_slot_payload(r):
+    d = r.to_dict()
+    d["slot"] = r.slot.to_dict()
+    return d
+
+
 @bp.get("/reopened")
 @login_required_api
 def list_reopened():
+    """Everything currently open for claim — the Open Shifts page. Any active
+    student is eligible for any of these (deliberately no availability
+    restriction — see CLAUDE.md #7's FCFS-only-for-reopens design)."""
     rows = ReopenedSlot.query.filter_by(claimed_by=None).order_by(ReopenedSlot.opened_at.desc()).all()
-    out = []
-    for r in rows:
-        d = r.to_dict()
-        d["slot"] = r.slot.to_dict()
-        out.append(d)
-    return jsonify(out)
+    return jsonify([_open_slot_payload(r) for r in rows])
+
+
+@bp.post("/advertise")
+@overseer_required
+def advertise_slot():
+    """Manually open a slot for FCFS claim — the off-the-books case: leave
+    taken without going through a LeaveRequest, or pushing a never-filled
+    slot live now instead of waiting for /tick's lookahead window."""
+    data = request.get_json(force=True) or {}
+    slot_id = data.get("slot_id")
+    slot = Slot.query.get_or_404(slot_id)
+
+    if ReopenedSlot.query.filter_by(slot_id=slot_id, claimed_by=None).first():
+        return jsonify({"error": "already_advertised"}), 409
+
+    schedule = (
+        Schedule.query.filter_by(month_id=slot.month_id, status="committed")
+        .order_by(Schedule.generated_at.desc()).first()
+    )
+    if not schedule:
+        return jsonify({"error": "no_committed_schedule"}), 409
+
+    assignment = Assignment.query.filter_by(schedule_id=schedule.id, slot_id=slot_id).first()
+    if assignment:
+        db.session.delete(assignment)
+
+    slot.state = "reopened"
+    reopened = ReopenedSlot(slot_id=slot_id, source="manual", opened_at=local_now())
+    db.session.add(reopened)
+    db.session.flush()
+    db.session.commit()
+    notify_slot_open(reopened)
+    return jsonify(_open_slot_payload(reopened)), 201
 
 
 @bp.post("/reopened/<int:reopened_id>/claim")

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Open Shifts{% endblock %}
+{% block content %}
+<div id="open-app" v-cloak>
+  <section class="pad" style="margin-top:10px;">
+    <h2>Open Shifts <span class="hint">開放時段</span></h2>
+    <p class="hint">First come, first served — any active student can claim any of these.</p>
+
+    <p class="hint" v-if="loading">Loading…</p>
+    <div class="panel" v-else-if="!shifts.length">No open shifts right now.</div>
+
+    <div class="slot" v-for="s in shifts" v-bind:key="s.id" v-bind:class="{ open: true }" style="margin-bottom:8px;">
+      <div class="time mono">[[ s.slot.hour ]]:00<span class="to">[[ s.slot.date ]]</span></div>
+      <div class="name">
+        <div class="n1">[[ weekdayLabel(s.slot.date) ]] · [[ s.slot.hour ]]:00–[[ s.slot.hour + 1 ]]:00</div>
+        <div class="n2">[[ sourceLabel(s.source) ]]</div>
+      </div>
+
+      <template v-if="isStudent">
+        <button v-if="confirming !== s.id" v-on:click="confirming = s.id">Claim</button>
+        <div v-else style="text-align:right;">
+          <button v-bind:disabled="busy" v-on:click="claim(s)">Confirm</button>
+          <button class="secondary" v-on:click="confirming = null">Cancel</button>
+        </div>
+      </template>
+    </div>
+    <p class="error-text" v-if="message">[[ message ]]</p>
+  </section>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      shifts: [], loading: true, busy: false, confirming: null, message: "",
+      isStudent: CURRENT_USER && CURRENT_USER.role === "student",
+    };
+  },
+  async mounted() { await this.load(); },
+  methods: {
+    async load() {
+      this.loading = true;
+      try { this.shifts = await OIA.api.get("/api/leave/reopened"); }
+      finally { this.loading = false; }
+    },
+    weekdayLabel(d) { return OIA.weekdayLabel(d); },
+    sourceLabel(source) {
+      if (source === "leave") return "Freed by approved leave";
+      if (source === "auto_unfilled") return "Never filled";
+      return "Advertised by admin";
+    },
+    async claim(s) {
+      this.busy = true; this.message = "";
+      try {
+        await OIA.api.post("/api/leave/reopened/" + s.id + "/claim");
+        this.confirming = null;
+        await this.load();
+      } catch (e) {
+        this.message = e.message === "already_claimed_or_not_found"
+          ? "Someone else already claimed this one."
+          : e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#open-app");
+</script>
+{% endblock %}

@@ -131,6 +131,15 @@
     <button v-bind:disabled="busy" v-on:click="sendTest">Send test</button>
     <p class="hint">[[ testMessage2 ]]</p>
   </div>
+
+  <div class="panel">
+    <h2>Run /tick now 手動執行</h2>
+    <p class="hint">Runs everything the external cron does — selection window transitions, no-show flags,
+      forgot-signout flags, and auto-advertising never-filled slots within the lookahead window. Normally fires
+      on its own every few minutes in production; use this to test without waiting.</p>
+    <button v-bind:disabled="busy" v-on:click="runTick">Run tick now</button>
+    <pre class="hint" style="white-space:pre-wrap; margin-top:8px;">[[ tickResult ]]</pre>
+  </div>
 </div>
 {% endblock %}
 {% block page_script %}
@@ -148,6 +157,7 @@ const app = createApp({
       settings: null,
       busy: false, genMessage: "", demoMessage: "",
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
+      tickResult: "",
     };
   },
   computed: {
@@ -260,6 +270,15 @@ const app = createApp({
         this.testMessage2 = "Sent (or logged, if not configured yet).";
       } catch (e) {
         this.testMessage2 = e.message;
+      } finally { this.busy = false; }
+    },
+    async runTick() {
+      this.busy = true; this.tickResult = "";
+      try {
+        const res = await OIA.api.post("/api/admin/run-tick");
+        this.tickResult = JSON.stringify(res, null, 2);
+      } catch (e) {
+        this.tickResult = e.message;
       } finally { this.busy = false; }
     },
   },

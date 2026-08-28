@@ -19,6 +19,7 @@
           <button v-bind:disabled="busy" type="submit">Submit</button>
         </form>
         <p class="hint">[[ message ]]</p>
+        <p class="hint">Once approved, that slot opens up on <a href="/open-shifts">Open Shifts</a> for someone else to claim.</p>
       </div>
 
       <div class="panel">
@@ -32,16 +33,6 @@
             </tr>
           </tbody>
         </table>
-      </div>
-
-      <div class="panel">
-        <h3>Open (reopened) slots</h3>
-        <p class="hint" v-if="!reopened.length">None</p>
-        <div class="slot" v-for="r in reopened" v-bind:key="r.id" style="margin-bottom:8px;">
-          <div class="time mono">[[ r.slot.hour ]]:00<span class="to">[[ r.slot.date ]]</span></div>
-          <div></div>
-          <button v-on:click="claim(r.id)">Claim</button>
-        </div>
       </div>
     </template>
 
@@ -64,6 +55,8 @@
             </tr>
           </tbody>
         </table>
+        <p class="hint">Approving opens the slot on <a href="/open-shifts">Open Shifts</a> automatically. If a student
+          takes leave without filing a request here, use the Advertise button on that slot in Day view instead.</p>
       </div>
     </template>
   </section>
@@ -78,7 +71,7 @@ const app = createApp({
     return {
       isStudent: CURRENT_USER && CURRENT_USER.role === "student",
       isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
-      mySlots: [], myRequests: [], reopened: [], adminRequests: [],
+      mySlots: [], myRequests: [], adminRequests: [],
       slotId: "", reason: "", busy: false, message: "",
     };
   },
@@ -88,23 +81,16 @@ const app = createApp({
   },
   methods: {
     async loadStudent() {
-      const [assignments, requests, open] = await Promise.all([
+      const [assignments, requests] = await Promise.all([
         OIA.api.get("/api/schedule/mine"),
         OIA.api.get("/api/leave"),
-        OIA.api.get("/api/leave/reopened"),
       ]);
       const today = new Date().toISOString().slice(0, 10);
       this.mySlots = assignments.filter(a => a.slot.date >= today);
       this.myRequests = requests;
-      this.reopened = open;
     },
     async loadAdmin() {
-      const [pending, open] = await Promise.all([
-        OIA.api.get("/api/leave/admin?status=pending"),
-        OIA.api.get("/api/leave/reopened"),
-      ]);
-      this.adminRequests = pending;
-      this.reopened = open;
+      this.adminRequests = await OIA.api.get("/api/leave/admin?status=pending");
     },
     async submitRequest() {
       this.busy = true; this.message = "";
@@ -116,10 +102,6 @@ const app = createApp({
       } catch (e) {
         this.message = e.message;
       } finally { this.busy = false; }
-    },
-    async claim(id) {
-      await OIA.api.post("/api/leave/reopened/" + id + "/claim");
-      await this.loadStudent();
     },
     async decide(id, status) {
       await OIA.api.patch("/api/leave/admin/" + id, { status });

@@ -61,6 +61,11 @@ class Config:
     LEAVE_TOO_OFTEN_COUNT = int(os.environ.get("LEAVE_TOO_OFTEN_COUNT", 3))
     LEAVE_TOO_LATE_HOURS = int(os.environ.get("LEAVE_TOO_LATE_HOURS", 24))
 
+    # A never-filled committed slot is auto-advertised for FCFS claim once
+    # it's within this many days of today — not the instant the schedule
+    # commits, so a month's worth of far-future gaps doesn't flood the group.
+    ADVERTISE_LOOKAHEAD_DAYS = int(os.environ.get("ADVERTISE_LOOKAHEAD_DAYS", 2))
+
     # Floor guarantee: minimum hours before anyone gets extra (CLAUDE.md #6)
     SOLVER_FLOOR_HOURS = int(os.environ.get("SOLVER_FLOOR_HOURS", 4))
 

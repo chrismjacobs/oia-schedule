@@ -14,6 +14,7 @@ from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
+from app.notifications.tick import run_tick
 
 MONTH_TRANSITIONS = {
     "setup": {"selection_open"},
@@ -266,6 +267,15 @@ def close_month(month_id):
     db.session.commit()
     report["month"] = month.to_dict()
     return jsonify(report)
+
+
+# ---------------- Manual tick (session-authenticated, for testing —
+# the real /api/tick is the token-protected one the external cron hits) ----------------
+
+@bp.post("/run-tick")
+@overseer_required
+def run_tick_route():
+    return jsonify(run_tick())
 
 
 # ---------------- Demo data (CLAUDE.md #17) ----------------

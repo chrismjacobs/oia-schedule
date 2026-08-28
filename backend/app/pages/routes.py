@@ -87,6 +87,12 @@ def leave_page():
     return render_template("leave.html", active_nav="leave")
 
 
+@bp.get("/open-shifts")
+@page_login_required
+def open_shifts_page():
+    return render_template("open_shifts.html", active_nav="open-shifts")
+
+
 @bp.get("/tasks")
 @page_login_required
 def tasks_page():

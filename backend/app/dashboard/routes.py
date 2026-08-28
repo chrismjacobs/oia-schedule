@@ -10,7 +10,7 @@ from flask import jsonify, request, current_app
 from app.dashboard import bp
 from app.models import (
     Month, Schedule, Assignment, Slot, Student, HourlyReport, AttendanceSession,
-    LeaveRequest, RegularTask, TaskCompletion, CustomTask,
+    LeaveRequest, RegularTask, TaskCompletion, CustomTask, ReopenedSlot,
 )
 from app.utils.decorators import overseer_required
 from app.utils.tz import local_now, local_today
@@ -174,6 +174,12 @@ def day_view(date_str):
     grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
     now = local_now()
 
+    open_reopens = {
+        r.slot_id: r for r in ReopenedSlot.query.filter(
+            ReopenedSlot.slot_id.in_([s.id for s in slots]), ReopenedSlot.claimed_by.is_(None)
+        ).all()
+    }
+
     rows = []
     for slot in slots:
         a = assignment_by_slot.get(slot.id)
@@ -193,6 +199,7 @@ def day_view(date_str):
             "assignment": a.to_dict() if a else None,
             "student": students.get(a.student_id) if a else None,
             "status": status,
+            "advertised": slot.id in open_reopens,
             "note": report.note if report else None,
             "tasks_done": tasks_by_report.get(report.id) if report else None,
         })

@@ -279,10 +279,16 @@ class LeaveRequest(db.Model):
 
 
 class ReopenedSlot(db.Model):
+    """A slot open for FCFS claim. Three ways one of these gets created:
+    an approved leave request (leave_request_id set), the /tick job noticing
+    a never-filled committed slot as its date approaches (source=auto_unfilled),
+    or the overseer manually advertising an uncovered slot — e.g. leave taken
+    off the books, without a LeaveRequest (source=manual)."""
     __tablename__ = "reopened_slot"
     id = db.Column(db.Integer, primary_key=True)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
-    leave_request_id = db.Column(db.Integer, db.ForeignKey("leave_request.id"), nullable=False)
+    leave_request_id = db.Column(db.Integer, db.ForeignKey("leave_request.id"), nullable=True)
+    source = db.Column(db.String(16), nullable=False, default="leave")  # leave|auto_unfilled|manual
     opened_at = db.Column(db.DateTime, nullable=False, default=local_now)
     claimed_by = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)
     claimed_at = db.Column(db.DateTime, nullable=True)
@@ -296,6 +302,7 @@ class ReopenedSlot(db.Model):
             "id": self.id,
             "slot_id": self.slot_id,
             "leave_request_id": self.leave_request_id,
+            "source": self.source,
             "opened_at": self.opened_at.isoformat(),
             "claimed_by": self.claimed_by,
             "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
