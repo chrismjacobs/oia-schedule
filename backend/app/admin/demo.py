@@ -5,11 +5,13 @@ app so the grid renders like `roster-mockup.html` on first load. Every row is
 tagged `is_demo` (student, schedule) so "Reset demo data" can remove exactly
 this and nothing else — real students and schedules are never touched.
 
-The 9 students, their colour×shape tokens, and the weekly slot template below
-are lifted directly from roster-mockup.html's own embedded demo data, so the
-seeded grid — and the Monday "showcase day" in particular — reproduces the
-mockup's day view almost exactly (Wei-Chen 8-10, Sandy 10-12 with an 11:00
-no-show, Kevin 13-14, Amy 14-15, an open 15:00, Grace 16-17).
+6 students, matching the real roster's actual scale (under 10) rather than
+the mockup's illustrative 9 — small enough that no colour ever needs to
+repeat (8-colour palette, exhausted only past 8 students; see identity.py).
+The weekly template below is a hand-built 6-person analogue of the mockup's
+own wkData, preserving its shape: everyone gets a plausible spread of hours,
+a couple of cells stay open (hatched), and the Monday "showcase day" tells
+the same story as the mockup's day view (a no-show, an open slot).
 """
 import calendar
 from datetime import date as date_cls, datetime
@@ -25,7 +27,7 @@ from app.utils.settings import get_solver_weights, get_floor_hours
 
 DEMO_SEMESTER_NAME = "Demo"
 
-# (english_name, chinese_name, colour, shape, student_id) — matches the mockup's `people` array.
+# (english_name, chinese_name, colour, shape, student_id)
 DEMO_STUDENTS = [
     ("Wei-Chen", "陳威辰", "#0072B2", "circle",   "90000001"),
     ("Sandy",    "林思妤", "#E69F00", "triangle", "90000002"),
@@ -33,22 +35,18 @@ DEMO_STUDENTS = [
     ("Amy",      "張書瑋", "#D55E00", "diamond",  "90000004"),
     ("Grace",    "李佳穎", "#7E57C2", "circle",   "90000005"),
     ("Ethan",    "吳承恩", "#0EA5A5", "triangle", "90000006"),
-    ("Emma",     "王詩涵", "#C2185B", "square",   "90000007"),
-    ("Leo",      "周宥廷", "#8D6E63", "diamond",  "90000008"),
-    ("Ryan",     "蔡孟儒", "#0072B2", "triangle", "90000009"),  # reuses blue — shape differentiates
 ]
 
 # Weekly template: [hour_index][weekday Mon-Fri] -> student index into DEMO_STUDENTS, or None (open).
-# Lifted verbatim from roster-mockup.html's `wkData`.
 WEEK_TEMPLATE = [
-    [0, 0, 4, 1, 2],
-    [0, 5, 4, 1, 2],
-    [1, 5, 3, 8, 6],
-    [1, 3, 3, 8, 6],
-    [2, 3, 7, 0, 4],
-    [3, 6, 7, 0, 4],
-    [None, 6, 5, 1, None],
-    [4, 2, 5, 1, 7],
+    [0, 0, 3, 1, 2],
+    [0, 5, 3, 1, 2],
+    [1, 5, 4, None, 0],
+    [1, 3, 4, None, 0],
+    [2, 4, 5, 3, 1],
+    [2, 4, 5, 3, 1],
+    [None, 0, 2, 5, None],
+    [4, 2, 0, 5, 3],
 ]
 
 
@@ -189,6 +187,8 @@ def seed_demo():
 
 
 def _seed_showcase_attendance(showcase_date, slots_by_date_hour, students):
+    """Matches WEEK_TEMPLATE's Monday column: Wei-Chen 8-10, Sandy 10-12 with
+    an 11:00 no-show, Kevin 13-15, an open 15:00, Grace 16-17."""
     def dt(hour):
         return datetime.combine(showcase_date, datetime.min.time()).replace(hour=hour)
 
@@ -196,10 +196,8 @@ def _seed_showcase_attendance(showcase_date, slots_by_date_hour, students):
     _record_session(students[0], showcase_date, dt(8), dt(10), [slots_by_date_hour[(showcase_date, 8)], slots_by_date_hour[(showcase_date, 9)]])
     # Sandy: signs in for 10:00 only — 11:00 stays a no-show (assigned, never reported).
     _record_session(students[1], showcase_date, dt(10), dt(11), [slots_by_date_hour[(showcase_date, 10)]])
-    # Kevin: 13:00-14:00.
-    _record_session(students[2], showcase_date, dt(13), dt(14), [slots_by_date_hour[(showcase_date, 13)]])
-    # Amy: 14:00-15:00.
-    _record_session(students[3], showcase_date, dt(14), dt(15), [slots_by_date_hour[(showcase_date, 14)]])
+    # Kevin: 13:00-15:00, both hours recorded.
+    _record_session(students[2], showcase_date, dt(13), dt(15), [slots_by_date_hour[(showcase_date, 13)], slots_by_date_hour[(showcase_date, 14)]])
     # 15:00 stays open/uncovered (no assignment was made — see WEEK_TEMPLATE).
     # Grace: 16:00-17:00.
     _record_session(students[4], showcase_date, dt(16), dt(17), [slots_by_date_hour[(showcase_date, 16)]])
