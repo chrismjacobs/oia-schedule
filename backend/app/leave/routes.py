@@ -6,7 +6,7 @@ from app.extensions import db
 from app.models import LeaveRequest, Slot, Assignment, Schedule, ReopenedSlot, Student
 from app.utils.decorators import login_required_api, overseer_required
 from app.attendance.routes import _slot_start
-from app.notifications.service import notify_slot_open
+from app.notifications.service import notify_slot_open, notify_leave_requested
 from app.utils.tz import local_now
 
 
@@ -49,6 +49,7 @@ def request_leave():
                        requested_at=now, lead_time_hours=round(lead_hours, 2))
     db.session.add(lr)
     db.session.commit()
+    notify_leave_requested(lr)
     return jsonify(lr.to_dict()), 201
 
 

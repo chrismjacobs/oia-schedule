@@ -3,7 +3,7 @@ Surfaces: scheduled-vs-recorded gaps, no-shows, leave patterns, uncovered
 slots, task completion. All values here are derived, never stored
 (SCHEMA.md 'Derived values')."""
 from collections import defaultdict
-from datetime import date as date_cls, datetime, timedelta
+from datetime import datetime, timedelta
 
 from flask import jsonify, request, current_app
 
@@ -136,28 +136,29 @@ def month_dashboard(month_id):
     return jsonify(build_month_dashboard(month))
 
 
-@bp.get("/day/<date_str>")
-@overseer_required
-def day_view(date_str):
-    d = date_cls.fromisoformat(date_str)
-    slots = Slot.query.filter_by(date=d).order_by(Slot.hour).all()
+def _slot_status_rows(slots):
+    """Per-slot status the overseer's schedule grid needs: who's assigned,
+    whether they've actually shown up, and whether an uncovered slot is
+    already advertised. Shared by the month grid below — used to be
+    day-view-only, generalised so the merged Day+Week view can show the same
+    status for every slot in a month, not just one day."""
     if not slots:
-        return jsonify({"date": date_str, "slots": []})
+        return []
 
-    month_id = slots[0].month_id
-    schedule = _committed_schedule(month_id)
+    schedule = _committed_schedule(slots[0].month_id)
     students = {s.id: s.to_dict() for s in Student.query.all()}
+    slot_ids = [s.id for s in slots]
 
     assignment_by_slot = {}
     if schedule:
         for a in Assignment.query.filter(
-            Assignment.schedule_id == schedule.id, Assignment.slot_id.in_([s.id for s in slots])
+            Assignment.schedule_id == schedule.id, Assignment.slot_id.in_(slot_ids)
         ).all():
             assignment_by_slot[a.slot_id] = a
 
     reports = (
         HourlyReport.query.join(AttendanceSession, HourlyReport.session_id == AttendanceSession.id)
-        .filter(HourlyReport.slot_id.in_([s.id for s in slots])).all()
+        .filter(HourlyReport.slot_id.in_(slot_ids)).all()
     )
     report_by_slot = {r.slot_id: r for r in reports}
     report_ids = [r.id for r in reports]
@@ -176,7 +177,7 @@ def day_view(date_str):
 
     open_reopens = {
         r.slot_id: r for r in ReopenedSlot.query.filter(
-            ReopenedSlot.slot_id.in_([s.id for s in slots]), ReopenedSlot.claimed_by.is_(None)
+            ReopenedSlot.slot_id.in_(slot_ids), ReopenedSlot.claimed_by.is_(None)
         ).all()
     }
 
@@ -203,5 +204,20 @@ def day_view(date_str):
             "note": report.note if report else None,
             "tasks_done": tasks_by_report.get(report.id) if report else None,
         })
+    return rows
 
-    return jsonify({"date": date_str, "slots": rows})
+
+@bp.get("/months/<int:month_id>/grid")
+@overseer_required
+def month_grid(month_id):
+    """The merged Day+Week schedule view: every slot in the month with live
+    status (scheduled/recorded/no-show/uncovered/advertised), for the
+    overseer's week-by-week grid — not just the assignment, like
+    /api/schedule/months/<id> gives."""
+    Month.query.get_or_404(month_id)
+    slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
+    return jsonify({
+        "month_id": month_id,
+        "students": {s.id: s.to_dict() for s in Student.query.filter_by(is_active=True).all()},
+        "slots": _slot_status_rows(slots),
+    })

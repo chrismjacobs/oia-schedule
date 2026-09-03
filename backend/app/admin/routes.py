@@ -1,4 +1,3 @@
-import calendar
 from datetime import datetime, date as date_cls
 from uuid import uuid4
 
@@ -8,10 +7,12 @@ from app.admin import bp
 from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
-    SLOT_HOURS, MONTH_STATES,
+    RegularSlotTemplate, RegularSlot,
+    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
+from app.utils.periods import weekdays_in_month
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
@@ -223,6 +224,102 @@ def set_selection_window(month_id):
     return jsonify(sw.to_dict())
 
 
+# ---------------- Regular schedule (standing slots) ----------------
+# Master weekly template (persists across months) + per-month instances the
+# overseer hand-edits week by week. See RegularSlotTemplate / RegularSlot in
+# models.py for the full rationale.
+
+@bp.get("/regular-template")
+@overseer_required
+def get_regular_template():
+    rows = RegularSlotTemplate.query.all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+@bp.put("/regular-template/cell")
+@overseer_required
+def set_regular_template_cell():
+    data = request.get_json(force=True) or {}
+    weekday = data.get("weekday")
+    hour = data.get("hour")
+    state = data.get("state")
+    if weekday is None or hour is None or state not in REGULAR_SLOT_STATES:
+        return jsonify({"error": "invalid_cell"}), 400
+    student_id = data.get("student_id") if state == "assigned" else None
+    if state == "assigned" and not student_id:
+        return jsonify({"error": "student_id_required"}), 400
+
+    row = RegularSlotTemplate.query.filter_by(weekday=weekday, hour=hour).first()
+    if not row:
+        row = RegularSlotTemplate(weekday=weekday, hour=hour)
+        db.session.add(row)
+    row.state = state
+    row.student_id = student_id
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
+def _month_weekdays_minus_closed(month):
+    year, mon = (int(x) for x in month.year_month.split("-"))
+    closed = {c.date for c in ClosedDate.query.filter(
+        db.extract("year", ClosedDate.date) == year,
+        db.extract("month", ClosedDate.date) == mon,
+    ).all()}
+    for d in weekdays_in_month(month.year_month):
+        if d not in closed:
+            yield d
+
+
+@bp.post("/months/<int:month_id>/regular-slots/populate")
+@overseer_required
+def populate_regular_slots(month_id):
+    """Copy the master template into this month's regular_slot rows, filling
+    in only what's missing — safe to re-run any time during setup (e.g. after
+    adding a closed date) without disturbing cells the overseer already
+    hand-edited for this month."""
+    month = Month.query.get_or_404(month_id)
+    template_by_key = {(t.weekday, t.hour): t for t in RegularSlotTemplate.query.all()}
+    existing = {(r.date, r.hour) for r in RegularSlot.query.filter_by(month_id=month.id).all()}
+
+    created = 0
+    for d in _month_weekdays_minus_closed(month):
+        for hour in SLOT_HOURS:
+            if (d, hour) in existing:
+                continue
+            tmpl = template_by_key.get((d.weekday(), hour))
+            state = tmpl.state if tmpl else "unassigned"
+            student_id = tmpl.student_id if tmpl and tmpl.state == "assigned" else None
+            db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour, state=state, student_id=student_id))
+            created += 1
+    db.session.commit()
+    return jsonify({"created": created}), 201
+
+
+@bp.get("/months/<int:month_id>/regular-slots")
+@overseer_required
+def list_regular_slots(month_id):
+    Month.query.get_or_404(month_id)
+    rows = RegularSlot.query.filter_by(month_id=month_id).order_by(RegularSlot.date, RegularSlot.hour).all()
+    return jsonify([r.to_dict() for r in rows])
+
+
+@bp.patch("/regular-slots/<int:regular_slot_id>")
+@overseer_required
+def update_regular_slot(regular_slot_id):
+    row = RegularSlot.query.get_or_404(regular_slot_id)
+    data = request.get_json(force=True) or {}
+    state = data.get("state")
+    if state not in REGULAR_SLOT_STATES:
+        return jsonify({"error": "invalid_state"}), 400
+    student_id = data.get("student_id") if state == "assigned" else None
+    if state == "assigned" and not student_id:
+        return jsonify({"error": "student_id_required"}), 400
+    row.state = state
+    row.student_id = student_id
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
 # ---------------- Slot generation ----------------
 
 @bp.post("/months/<int:month_id>/generate-slots")
@@ -232,21 +329,19 @@ def generate_slots(month_id):
     if Slot.query.filter_by(month_id=month.id).first():
         return jsonify({"error": "slots_already_generated"}), 409
 
-    year, mon = (int(x) for x in month.year_month.split("-"))
-    closed = {c.date for c in ClosedDate.query.filter(
-        db.extract("year", ClosedDate.date) == year,
-        db.extract("month", ClosedDate.date) == mon,
-    ).all()}
+    # Any (date, hour) already marked unavailable in this month's regular
+    # schedule never gets a Slot at all — coverage need varies month to
+    # month, not every hour needs staffing (CLAUDE.md discussion). Cells with
+    # no regular_slot row (feature unused, or populate never run) fall back
+    # to plain slot generation exactly as before.
+    regular_by_key = {(r.date, r.hour): r for r in RegularSlot.query.filter_by(month_id=month.id).all()}
 
-    _, days_in_month = calendar.monthrange(year, mon)
     created = 0
-    for day in range(1, days_in_month + 1):
-        d = date_cls(year, mon, day)
-        if d.weekday() >= 5:  # Sat/Sun
-            continue
-        if d in closed:
-            continue
+    for d in _month_weekdays_minus_closed(month):
         for hour in SLOT_HOURS:
+            reg = regular_by_key.get((d, hour))
+            if reg and reg.state == "unavailable":
+                continue
             period = "morning" if hour < 12 else "afternoon"
             db.session.add(Slot(month_id=month.id, date=d, hour=hour, period=period, state="open"))
             created += 1
@@ -304,6 +399,7 @@ def get_settings():
         "solver_weights": get_setting("solver_weights", dict(current_app.config["SOLVER_WEIGHTS"])),
         "solver_floor_hours": get_setting("solver_floor_hours", current_app.config["SOLVER_FLOOR_HOURS"]),
         "timecard_cadence": get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"]),
+        "notify_attendance_events": get_setting("notify_attendance_events", True),
         "sign_in_opens_minutes_before": current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"],
         "no_show_grace_minutes": current_app.config["NO_SHOW_GRACE_MINUTES"],
         "closing_warning_hours_before": current_app.config["CLOSING_WARNING_HOURS_BEFORE"],
@@ -320,4 +416,6 @@ def put_settings():
         set_setting("solver_floor_hours", int(data["solver_floor_hours"]))
     if "timecard_cadence" in data:
         set_setting("timecard_cadence", data["timecard_cadence"])
+    if "notify_attendance_events" in data:
+        set_setting("notify_attendance_events", bool(data["notify_attendance_events"]))
     return get_settings()

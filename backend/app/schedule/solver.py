@@ -5,6 +5,13 @@ Hard constraints: at most one student per slot; never assign an hour a
 student didn't offer. (No-double-booking and closed-date exclusion fall out
 for free: slots are unique per date+hour, and closed dates never get slots.)
 
+Pre-pass, before CP-SAT runs: standing regular-slot claims (`RegularSlot`,
+state=assigned) are locked in first, but only for a student who actually
+offered that hour this month — see `_load_regular_locks`. If they didn't
+offer it, the hour is just a normal contested slot for whoever did. This is
+a lock, not a solver weight: predictable and auditable rather than a
+tunable that might get out-argued by the objective.
+
 Soft preferences, in priority order (encoded as weighted objective terms so
 higher-priority terms use larger weights and dominate lower ones):
   1. coverage        - maximise filled slots
@@ -24,7 +31,7 @@ from collections import defaultdict
 
 from ortools.sat.python import cp_model
 
-from app.models import Slot, Availability
+from app.models import Slot, Availability, RegularSlot
 
 
 def _load_inputs(month_id):
@@ -42,12 +49,55 @@ def _load_inputs(month_id):
     return slots, by_slot, by_student
 
 
+def _load_regular_locks(month_id, by_slot, slots):
+    """Standing regular-slot claims: a student with a regular_slot 'assigned'
+    to them this month is locked in before the solver runs — but only if they
+    actually offered that hour (never assign an hour a student didn't select).
+    If they didn't select it, it stays a normal contested slot for whoever
+    did — no special treatment beyond this lock."""
+    slot_id_by_date_hour = {(s.date, s.hour): s.id for s in slots}
+    locked = {}
+    regular_rows = RegularSlot.query.filter_by(month_id=month_id, state="assigned").all()
+    for r in regular_rows:
+        if r.student_id is None:
+            continue
+        slot_id = slot_id_by_date_hour.get((r.date, r.hour))
+        if slot_id is None or slot_id not in by_slot:
+            continue
+        if r.student_id not in by_slot[slot_id]:
+            continue
+        locked[slot_id] = r.student_id
+    return locked
+
+
 def solve_month(month_id, weights, floor_hours, time_limit_seconds=20):
     """Returns {slot_id: student_id} for the best assignment found, plus a
     dict of solver metadata for the audit trail."""
     slots, by_slot, by_student = _load_inputs(month_id)
+
+    locked = _load_regular_locks(month_id, by_slot, slots)
+    if locked:
+        # Strip locked slots from every student's offer list, not just the
+        # locked student's — otherwise CP-SAT still creates a free variable
+        # for some other student on that slot (no "at most one" constraint
+        # applies to it once it's out of by_slot) and can happily overwrite
+        # the lock in the final merge.
+        locked_slot_ids = set(locked.keys())
+        for slot_id in locked_slot_ids:
+            by_slot.pop(slot_id, None)
+        for student_id in list(by_student.keys()):
+            remaining = [sid for sid in by_student[student_id] if sid not in locked_slot_ids]
+            if remaining:
+                by_student[student_id] = remaining
+            else:
+                del by_student[student_id]
+
     if not by_student:
-        return {}, {"status": "NO_AVAILABILITY", "assigned": 0, "total_slots": len(slots)}
+        meta = {
+            "status": "REGULAR_ONLY" if locked else "NO_AVAILABILITY",
+            "assigned": len(locked), "total_slots": len(slots), "regular_locked": len(locked),
+        }
+        return dict(locked), meta
 
     slot_by_id = {s.id: s for s in slots}
     students = list(by_student.keys())
@@ -161,18 +211,23 @@ def solve_month(month_id, weights, floor_hours, time_limit_seconds=20):
     }
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        result = {}
+        result = dict(locked)
         for (student_id, slot_id), var in x.items():
             if solver.Value(var) == 1:
                 result[slot_id] = student_id
         meta["assigned"] = len(result)
+        meta["regular_locked"] = len(locked)
+        meta["regular_locked_slot_ids"] = list(locked.keys())
         meta["objective_value"] = solver.ObjectiveValue()
         return result, meta
 
     # Fallback: greedy round-robin (CLAUDE.md #6 — explainable, acceptable if
     # CP-SAT can't produce a feasible solution in the time budget).
     result = _greedy_round_robin(slots, by_slot, floor_hours)
+    result.update(locked)
     meta["assigned"] = len(result)
+    meta["regular_locked"] = len(locked)
+    meta["regular_locked_slot_ids"] = list(locked.keys())
     meta["fallback"] = "greedy_round_robin"
     return result, meta
 

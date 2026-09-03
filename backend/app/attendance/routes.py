@@ -9,6 +9,7 @@ from app.models import (
     Slot, Assignment, Schedule, Month, AttendanceSession, HourlyReport,
     RegularTask, TaskCompletion, CustomTask,
 )
+from app.notifications.service import notify_signed_in, notify_signed_out
 from app.utils.decorators import login_required_api
 from app.utils.periods import period_key_for
 from app.utils.s3 import upload_object
@@ -65,10 +66,27 @@ def today():
         student_id=current_user.student_id, date=today_date, signed_out_at=None
     ).first()
 
+    # Due-or-overdue event-dated custom tasks — banners front-and-centre on
+    # sign-in for every student, not just whoever eventually claims it
+    # (CLAUDE.md #10). Stays visible (not hidden) once the date passes and
+    # it's still open, so it can't silently fall through the cracks.
+    due_tasks = (
+        CustomTask.query.filter(
+            CustomTask.event_date.isnot(None),
+            CustomTask.event_date <= today_date,
+            CustomTask.status.in_(("open", "claimed")),
+        )
+        .order_by(CustomTask.event_date)
+        .all()
+    )
+
     return jsonify({
         "date": today_date.isoformat(),
         "scheduled_slots": slot_rows,
         "open_session": open_session.to_dict() if open_session else None,
+        "due_tasks": [
+            dict(t.to_dict(), overdue=t.event_date < today_date) for t in due_tasks
+        ],
     })
 
 
@@ -158,6 +176,7 @@ def sign_in():
         session.flag_reason = "not_scheduled"
     db.session.add(session)
     db.session.commit()
+    notify_signed_in(session)
     return jsonify(session.to_dict()), 201
 
 
@@ -280,6 +299,7 @@ def sign_out():
 
     session.signed_out_at = now
     db.session.commit()
+    notify_signed_out(session)
     result = session.to_dict()
     result["skipped"] = skipped
     return jsonify(result)

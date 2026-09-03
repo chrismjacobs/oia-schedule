@@ -9,25 +9,49 @@
     <div class="panel" v-else-if="!month">No month is currently open for selection.</div>
     <template v-else>
       <p class="hint" v-if="!windowOpen">Selection window is closed 選填時段目前未開放</p>
-      <p>[[ selected.size ]] hours selected</p>
+      <p>[[ selected.size ]] hours selected · greyed cells aren't offered (closed day or not a working hour)</p>
+      <p class="hint">
+        <span style="display:inline-block; width:10px; height:10px; background:#E7F0EB; border-left:2px solid var(--ok); vertical-align:middle;"></span> your regular hours ·
+        <span style="display:inline-block; width:10px; height:10px; background:var(--open-bg); border-left:2px solid var(--open); vertical-align:middle;"></span> someone else's regular slot (probably covered) ·
+        <span style="display:inline-block; width:10px; height:10px; background:var(--urgent-bg); border-left:2px solid var(--urgent); vertical-align:middle;"></span> that person already opted out — needs a volunteer ·
+        <span style="display:inline-block; width:10px; height:10px; border-left:2px solid var(--avail-blue); vertical-align:middle;"></span> open/shared hours
+      </p>
 
-      <div class="weekwrap">
-        <table class="grid">
-          <thead><tr><th class="h"></th><th v-for="d in dates" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th></tr></thead>
-          <tbody>
-            <tr v-for="h in HOURS" v-bind:key="h">
-              <td class="h mono">[[ h ]]:00</td>
-              <td v-for="d in dates" v-bind:key="d+'_'+h"
-                  v-bind:style="isSelected(d,h) ? { background: 'var(--accent)' } : {}"
-                  v-bind:class="{ empty: !isSelected(d,h) }"
-                  style="cursor:pointer;"
-                  v-on:click="toggle(d,h)">
-                <span v-if="isSelected(d,h)" style="color:#fff;">✓</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div style="display:flex; gap:8px; align-items:center; margin:10px 0;">
+        <button class="secondary" v-bind:disabled="!windowOpen || !hasRegularHours" v-on:click="addRegularHours">Add my regular hours</button>
+        <button class="secondary" v-bind:disabled="!windowOpen || loadingLastMonth" v-on:click="addLastMonthHours">Add last month's hours</button>
+        <span class="hint">[[ lastMonthMsg ]]</span>
       </div>
+
+      <template v-for="(week, wi) in weeks" v-bind:key="wi">
+        <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
+        <div class="weekwrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="h">時 / hr</th>
+                <th v-for="d in week" v-bind:key="d" v-bind:class="{ 'reg-unavailable': isClosed(d) }">
+                  [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
+                  <div class="hint" v-if="isClosed(d)">[[ closedReason(d) ]]</div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="h in HOURS" v-bind:key="h">
+                <td class="h mono">[[ hourLabel(h) ]]</td>
+                <td v-for="d in week" v-bind:key="d+'_'+h"
+                    class="reg-cell"
+                    v-bind:class="cellClass(d,h)"
+                    v-bind:style="isSelected(d,h) ? { background: selectedColor(d,h) } : {}"
+                    style="cursor:pointer;"
+                    v-on:click="toggle(d,h)">
+                  <span v-if="isSelected(d,h)" style="color:#fff;">✓</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
       <button style="margin:14px 16px 0;" v-bind:disabled="!windowOpen || saving" v-on:click="save">Save my hours 儲存我的時段</button>
       <p class="hint" style="margin:6px 16px 0;">[[ saveMsg ]]</p>
     </template>
@@ -38,50 +62,113 @@
 <script>
 const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
+const myStudentId = (window.CURRENT_USER && window.CURRENT_USER.student) ? window.CURRENT_USER.student.id : null;
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { month: null, slots: [], selected: new Set(), windowOpen: false, loading: true, saving: false, saveMsg: "", HOURS };
+    return {
+      month: null, dates: [], cells: [], selected: new Set(),
+      windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false,
+      loadingLastMonth: false, lastMonthMsg: "", HOURS,
+    };
   },
   computed: {
-    dates() {
-      const seen = new Set(), out = [];
-      this.slots.forEach(s => { if (!seen.has(s.date)) { seen.add(s.date); out.push(s.date); } });
-      return out;
-    },
-    slotIndex() {
+    dateStrs() { return this.dates.map(d => d.date); },
+    weeks() { return OIA.groupIntoWeeks(this.dateStrs); },
+    dateByStr() {
       const map = {};
-      this.slots.forEach(s => { map[s.date + "_" + s.hour] = s; });
+      this.dates.forEach(d => { map[d.date] = d; });
       return map;
     },
+    cellIndex() {
+      const map = {};
+      this.cells.forEach(c => { map[c.date + "_" + c.hour] = c; });
+      return map;
+    },
+    hasRegularHours() { return this.cells.some(c => c.is_regular && c.slot_id); },
   },
   async mounted() {
+    OIA.watchNarrow((v) => { this.narrow = v; });
     this.loading = true;
     try {
       const current = await OIA.api.get("/api/availability/current");
       if (!current) return;
       this.month = current;
       const res = await OIA.api.get("/api/availability/" + current.id);
-      this.slots = res.slots;
+      this.dates = res.dates;
+      this.cells = res.cells;
       this.windowOpen = res.window_open;
-      this.selected = new Set(res.slots.filter(s => s.selected).map(s => s.id));
+      this.selected = new Set(res.cells.filter(c => c.selected).map(c => c.slot_id));
     } finally {
       this.loading = false;
     }
   },
   methods: {
+    cell(date, hour) { return this.cellIndex[date + "_" + hour]; },
+    isClosed(date) { const d = this.dateByStr[date]; return d && d.closed; },
+    closedReason(date) { const d = this.dateByStr[date]; return d ? (d.reason || "closed") : ""; },
     toggle(date, hour) {
       if (!this.windowOpen) return;
-      const s = this.slotIndex[date + "_" + hour];
-      if (!s) return;
-      if (this.selected.has(s.id)) this.selected.delete(s.id); else this.selected.add(s.id);
+      const c = this.cell(date, hour);
+      if (!c || !c.slot_id) return;
+      if (this.selected.has(c.slot_id)) this.selected.delete(c.slot_id); else this.selected.add(c.slot_id);
       this.selected = new Set(this.selected); // trigger reactivity
     },
     isSelected(date, hour) {
-      const s = this.slotIndex[date + "_" + hour];
-      return s && this.selected.has(s.id);
+      const c = this.cell(date, hour);
+      return c && c.slot_id && this.selected.has(c.slot_id);
+    },
+    // Four tiers, bar colour shows regardless of selection: green = your own
+    // regular hours, grey = someone else's regular slot (probably covered),
+    // red = that regular slot is confirmed open (needs a volunteer), blue =
+    // plain open/shared hours. Selected fill uses the same colour family —
+    // see selectedColor() — so a manual pick and a bulk-added one look
+    // identical; only the category matters, not how it got selected.
+    cellClass(date, hour) {
+      const c = this.cell(date, hour);
+      if (!c || !c.slot_id) return { "reg-unavailable": true };
+      if (c.is_regular) return { "avail-mine-regular": true };
+      if (c.regular_student_id && c.regular_student_id !== myStudentId) {
+        return c.regular_declined ? { "avail-urgent": true } : { "avail-regular-other": true };
+      }
+      return { "avail-open": true };
+    },
+    selectedColor(date, hour) {
+      const c = this.cell(date, hour);
+      if (!c) return "var(--avail-blue)";
+      if (c.is_regular) return "var(--ok)";
+      if (c.regular_student_id && c.regular_student_id !== myStudentId && c.regular_declined) return "var(--urgent)";
+      return "var(--avail-blue)";
     },
     weekdayLabel(date) { return OIA.weekdayLabel(date); },
+    hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
+    addRegularHours() {
+      this.cells.forEach(c => {
+        if (c.is_regular && c.slot_id && !this.selected.has(c.slot_id)) this.selected.add(c.slot_id);
+      });
+      this.selected = new Set(this.selected);
+    },
+    async addLastMonthHours() {
+      this.loadingLastMonth = true; this.lastMonthMsg = "";
+      try {
+        const res = await OIA.api.get("/api/availability/" + this.month.id + "/previous-nonregular");
+        const pairs = res.weekday_hours;
+        if (!pairs.length) { this.lastMonthMsg = "Nothing found from last month."; return; }
+        let added = 0;
+        this.cells.forEach(c => {
+          if (!c.slot_id || this.selected.has(c.slot_id)) return;
+          const wd = OIA.mondayWeekday(c.date);
+          if (pairs.some(p => p.weekday === wd && p.hour === c.hour)) {
+            this.selected.add(c.slot_id);
+            added++;
+          }
+        });
+        this.selected = new Set(this.selected);
+        this.lastMonthMsg = added ? `Added ${added} hour(s).` : "Already have all of those selected.";
+      } finally {
+        this.loadingLastMonth = false;
+      }
+    },
     async save() {
       this.saving = true; this.saveMsg = "";
       try {

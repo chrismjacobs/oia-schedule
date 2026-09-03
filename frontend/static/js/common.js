@@ -34,49 +34,7 @@
     del: (p) => request("DELETE", p),
   };
 
-  // ---------------- i18n ----------------
-  const STRINGS = {
-    "common.loading": { zh: "載入中…", en: "Loading…" },
-    "common.save": { zh: "儲存", en: "Save" },
-    "common.cancel": { zh: "取消", en: "Cancel" },
-    "common.submit": { zh: "送出", en: "Submit" },
-    "common.none": { zh: "無", en: "None" },
-    "common.approve": { zh: "核准", en: "Approve" },
-    "common.deny": { zh: "拒絕", en: "Deny" },
-    "common.claim": { zh: "認領", en: "Claim" },
-    "common.delete": { zh: "刪除", en: "Delete" },
-    "common.upload": { zh: "上傳", en: "Upload" },
-    "common.hours": { zh: "小時", en: "hrs" },
-    "nav.day": { zh: "當日", en: "Day" },
-    "nav.week": { zh: "週表", en: "Week" },
-    "nav.dashboard": { zh: "總覽", en: "Dashboard" },
-    "nav.draft": { zh: "草案審閱", en: "Draft review" },
-    "nav.setup": { zh: "後台設定", en: "Setup" },
-    "nav.availability": { zh: "選填時段", en: "Availability" },
-    "nav.my_schedule": { zh: "我的班表", en: "My Schedule" },
-    "nav.sign_in_out": { zh: "簽到退", en: "Sign in/out" },
-    "nav.leave": { zh: "請假", en: "Leave" },
-    "nav.tasks": { zh: "任務", en: "Tasks" },
-    "nav.timecards": { zh: "工時卡", en: "Timecards" },
-    "nav.logout": { zh: "登出", en: "Log out" },
-  };
-  const LANG_KEY = "oia_lang";
-  function getLang() { return localStorage.getItem(LANG_KEY) || "zh"; }
-  function setLang(l) {
-    localStorage.setItem(LANG_KEY, l);
-    document.querySelectorAll("[data-lang-btn]").forEach((b) => {
-      b.classList.toggle("on", b.dataset.langBtn === l);
-    });
-    document.body.dispatchEvent(new CustomEvent("oia:lang-changed", { detail: l }));
-  }
-  function t(key, vars) {
-    const entry = STRINGS[key];
-    let str = entry ? (entry[getLang()] || entry.en || key) : key;
-    if (vars) {
-      Object.keys(vars).forEach((k) => { str = str.replace("{" + k + "}", vars[k]); });
-    }
-    return str;
-  }
+  // ---------------- bilingual formatting (student names, task titles) ----------------
   function bilingual(zh, en) {
     if (zh && en) return zh + " " + en;
     return zh || en || "";
@@ -88,6 +46,54 @@
   function weekdayLabel(dateStr) {
     const [y, m, d] = dateStr.split("-").map(Number);
     return WEEKDAY_LABELS[new Date(y, m - 1, d).getDay()];
+  }
+  function weekdayIndex(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d).getDay(); // 0 Sun .. 6 Sat
+  }
+  // Python's date.weekday() convention (0=Mon..6=Sun) — matches what the
+  // backend returns for weekday/hour patterns (regular hours, last month's
+  // hours), so the two sides agree on what "Tuesday" means as a number.
+  function mondayWeekday(dateStr) {
+    const js = weekdayIndex(dateStr);
+    return js === 0 ? 6 : js - 1;
+  }
+
+  // ---------------- week-by-week grouping (Regular / Draft / merged schedule grid) ----------------
+  // Splits a sorted list of "YYYY-MM-DD" weekday strings into weeks, starting
+  // a new group at each Monday. The first/last week of a month can be a
+  // partial 1-4 day week — that's expected, not a bug.
+  function groupIntoWeeks(dates) {
+    const out = [];
+    let cur = [];
+    dates.forEach((d) => {
+      if (weekdayIndex(d) === 1 && cur.length) { out.push(cur); cur = []; }
+      cur.push(d);
+    });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+
+  // ---------------- narrow-viewport watcher (abbreviate grid text below ~640px) ----------------
+  function watchNarrow(onChange, breakpoint) {
+    const mq = window.matchMedia("(max-width: " + (breakpoint || 640) + "px)");
+    onChange(mq.matches);
+    const listener = (e) => onChange(e.matches);
+    mq.addEventListener("change", listener);
+    return mq;
+  }
+
+  // ---------------- grid text abbreviation (same narrow-screen convention everywhere) ----------------
+  function shortName(name) { return name ? name.slice(0, 2) : ""; }
+  function hourLabel(hour, narrow) { return narrow ? String(hour) : hour + ":00"; }
+  const STATE_LABELS = {
+    unavailable: { full: "Unavailable", short: "na" },
+    unassigned: { full: "Unassigned", short: "--" },
+  };
+  function stateLabel(state, narrow) {
+    const entry = STATE_LABELS[state];
+    if (!entry) return state;
+    return narrow ? entry.short : entry.full;
   }
 
   // ---------------- colour x shape identity tokens ----------------
@@ -110,11 +116,10 @@
         svg() { return shapeSVG(this.student.colour, this.student.shape); },
       },
     });
-    app.config.globalProperties.$t = t;
     app.config.globalProperties.$bilingual = bilingual;
   }
 
-  // ---------------- header nav (hamburger drawer + lang toggle), plain JS ----------------
+  // ---------------- header nav (hamburger drawer), plain JS ----------------
   function initHeader() {
     const btn = document.querySelector("[data-hamburger]");
     const drawer = document.querySelector("[data-drawer]");
@@ -132,11 +137,6 @@
     document.querySelectorAll("[data-drawer-close]").forEach((el) => el.addEventListener("click", close));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
-    document.querySelectorAll("[data-lang-btn]").forEach((b) => {
-      b.classList.toggle("on", b.dataset.langBtn === getLang());
-      b.addEventListener("click", () => setLang(b.dataset.langBtn));
-    });
-
     const logoutBtn = document.querySelector("[data-logout]");
     if (logoutBtn) {
       logoutBtn.addEventListener("click", async () => {
@@ -147,5 +147,8 @@
   }
   document.addEventListener("DOMContentLoaded", initHeader);
 
-  window.OIA = { api, t, getLang, setLang, bilingual, shapeSVG, weekdayLabel, registerGlobals };
+  window.OIA = {
+    api, bilingual, shapeSVG, weekdayLabel, registerGlobals,
+    groupIntoWeeks, watchNarrow, shortName, hourLabel, stateLabel, mondayWeekday,
+  };
 })();

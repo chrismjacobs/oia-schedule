@@ -21,6 +21,10 @@ STUDENT_SHAPES = ["circle", "triangle", "square", "diamond"]
 
 SLOT_HOURS = [8, 9, 10, 11, 13, 14, 15, 16]  # 1-hour slots, Mon-Fri (CLAUDE.md #4)
 
+REGULAR_SLOT_STATES = ["unavailable", "unassigned", "assigned"]
+
+REGULAR_TASK_FREQUENCIES = ["daily", "weekly", "monthly", "unlimited"]
+
 MONTH_STATES = [
     "setup", "selection_open", "selection_closed", "draft",
     "review", "committed", "running", "closed",
@@ -188,6 +192,65 @@ class Slot(db.Model):
         }
 
 
+class RegularSlotTemplate(db.Model):
+    """Persistent weekly pattern for standing/regular assignments — some
+    students work the same hour every week. Not month-specific: copied into
+    `regular_slot` rows when a month's regular schedule is populated. Editing
+    this only affects months populated afterward."""
+    __tablename__ = "regular_slot_template"
+    id = db.Column(db.Integer, primary_key=True)
+    weekday = db.Column(db.Integer, nullable=False)  # 0=Mon .. 4=Fri
+    hour = db.Column(db.Integer, nullable=False)
+    state = db.Column(db.String(16), nullable=False, default="unassigned")  # unavailable|unassigned|assigned
+    student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)  # only when state=assigned
+
+    student = db.relationship("Student")
+
+    __table_args__ = (db.UniqueConstraint("weekday", "hour", name="uq_regular_template_weekday_hour"),)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "weekday": self.weekday,
+            "hour": self.hour,
+            "state": self.state,
+            "student_id": self.student_id,
+        }
+
+
+class RegularSlot(db.Model):
+    """One month's instance of the regular-slot pattern, per (date, hour) —
+    populated from `regular_slot_template` for that month, then hand-edited by
+    the overseer for one-off exceptions without touching the master template.
+    `state=unavailable` means no `Slot` is generated for that hour at all
+    (coverage need varies month to month — not every hour needs staffing).
+    `state=assigned` is a standing claim the solver locks in first, but only
+    if that student actually offers the hour that month; otherwise it's open
+    to whoever did offer it, same as any other slot."""
+    __tablename__ = "regular_slot"
+    id = db.Column(db.Integer, primary_key=True)
+    month_id = db.Column(db.Integer, db.ForeignKey("month.id"), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    hour = db.Column(db.Integer, nullable=False)
+    state = db.Column(db.String(16), nullable=False, default="unassigned")  # unavailable|unassigned|assigned
+    student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)  # only when state=assigned
+
+    month = db.relationship("Month")
+    student = db.relationship("Student")
+
+    __table_args__ = (db.UniqueConstraint("date", "hour", name="uq_regular_slot_date_hour"),)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "month_id": self.month_id,
+            "date": self.date.isoformat(),
+            "hour": self.hour,
+            "state": self.state,
+            "student_id": self.student_id,
+        }
+
+
 class Availability(db.Model):
     __tablename__ = "availability"
     id = db.Column(db.Integer, primary_key=True)
@@ -232,7 +295,7 @@ class Assignment(db.Model):
     schedule_id = db.Column(db.Integer, db.ForeignKey("schedule.id"), nullable=False)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
-    source = db.Column(db.String(16), nullable=False)  # solver|manual_edit|claimed
+    source = db.Column(db.String(16), nullable=False)  # solver|manual_edit|claimed|regular_lock
     created_at = db.Column(db.DateTime, nullable=False, default=local_now)
 
     schedule = db.relationship("Schedule", back_populates="assignments")
@@ -363,7 +426,7 @@ class RegularTask(db.Model):
     title_zh = db.Column(db.String(128), nullable=False)
     title_en = db.Column(db.String(128), nullable=True)
     description = db.Column(db.Text, nullable=True)
-    frequency = db.Column(db.String(16), nullable=False)  # daily|weekly|monthly
+    frequency = db.Column(db.String(16), nullable=False)  # daily|weekly|monthly|unlimited
     interval = db.Column(db.Integer, nullable=False, default=1)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     reference_s3_key = db.Column(db.String(255), nullable=True)  # admin's "what to do" photo
@@ -392,7 +455,7 @@ class TaskCompletion(db.Model):
     hourly_report_id = db.Column(db.Integer, db.ForeignKey("hourly_report.id"), nullable=True)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=True)
     completed_at = db.Column(db.DateTime, nullable=False, default=local_now)
-    period_key = db.Column(db.String(16), nullable=False)
+    period_key = db.Column(db.String(64), nullable=False)  # "u-<uuid4>" for unlimited tasks needs the room
     proof_s3_key = db.Column(db.String(255), nullable=True)  # student's completion photo
 
     regular_task = db.relationship("RegularTask")
@@ -425,6 +488,7 @@ class CustomTask(db.Model):
     claimed_by = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)
     claimed_at = db.Column(db.DateTime, nullable=True)
     hourly_report_id = db.Column(db.Integer, db.ForeignKey("hourly_report.id"), nullable=True)
+    event_date = db.Column(db.Date, nullable=True)  # set -> banners on sign-in from this date until done
     reference_s3_key = db.Column(db.String(255), nullable=True)  # admin's "what to do" photo
     photo_required = db.Column(db.Boolean, nullable=False, default=False)
     proof_s3_key = db.Column(db.String(255), nullable=True)  # student's completion photo
@@ -441,6 +505,7 @@ class CustomTask(db.Model):
             "status": self.status,
             "claimed_by": self.claimed_by,
             "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
+            "event_date": self.event_date.isoformat() if self.event_date else None,
             "reference_s3_key": self.reference_s3_key,
             "photo_required": self.photo_required,
             "proof_s3_key": self.proof_s3_key,
@@ -471,7 +536,7 @@ class TimecardUpload(db.Model):
 class NotificationLog(db.Model):
     __tablename__ = "notification_log"
     id = db.Column(db.Integer, primary_key=True)
-    type = db.Column(db.String(32), nullable=False)
+    type = db.Column(db.String(32), nullable=False)  # committed|leave_requested|slot_open|selection_open|closing_warning|no_show
     target = db.Column(db.String(16), nullable=False)  # group|individual|overseer
     related_type = db.Column(db.String(32), nullable=True)
     related_id = db.Column(db.Integer, nullable=True)

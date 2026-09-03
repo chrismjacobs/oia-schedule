@@ -31,3 +31,10 @@ def get_floor_hours():
 
 def get_timecard_cadence():
     return get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"])
+
+
+def get_attendance_notify_enabled():
+    """Sign-in/out LINE notifications — on by default, but every sign-in and
+    sign-out fires one, which can add up fast on a busy day. Toggle from
+    Advanced if it turns out to be too much (CLAUDE.md #12)."""
+    return get_setting("notify_attendance_events", True)

@@ -4,6 +4,17 @@
 <div id="att-app" v-cloak>
   <section class="pad" style="margin-top:10px;">
     <h2>Sign in / out <span class="hint">簽到退</span></h2>
+    <div class="panel" v-if="today && today.due_tasks.length" style="border-left:4px solid var(--warn); background:var(--warn-bg);">
+      <h3 style="color:var(--warn);">Needs doing today 今日待辦</h3>
+      <div v-for="dt in today.due_tasks" v-bind:key="dt.id" style="margin-bottom:8px;">
+        <strong>[[ dt.title_zh ]]</strong> <span v-if="dt.title_en">/ [[ dt.title_en ]]</span>
+        <span class="badge warn" v-if="dt.overdue">overdue — due [[ dt.event_date ]]</span>
+        <div class="hint" v-if="dt.description">[[ dt.description ]]</div>
+        <button class="secondary" v-if="dt.reference_s3_key" type="button" v-on:click="viewReference('custom', dt.id)">View reference photo</button>
+      </div>
+      <p class="hint">Tick these off at sign-out once done, same as any other task.</p>
+    </div>
+
     <p v-if="loading" class="hint">Loading…</p>
 
     <template v-else-if="today">

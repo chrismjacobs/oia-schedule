@@ -15,16 +15,16 @@
   <button class="close-drawer" data-drawer-close aria-label="Close menu">&times;</button>
   <h4>OIA · MCUT</h4>
   {% if current_user.role == 'overseer' %}
-    <a href="/day" class="{{ 'active' if active_nav == 'day' }}">Day <span class="hint">當日</span></a>
-    <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Week <span class="hint">週表</span></a>
+    <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Schedule <span class="hint">班表</span></a>
     <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard <span class="hint">總覽</span></a>
     <a href="/draft" class="{{ 'active' if active_nav == 'draft' }}">Draft review <span class="hint">草案審閱</span></a>
-    <a href="/setup" class="{{ 'active' if active_nav == 'setup' }}">Roster / Setup <span class="hint">名冊設定</span></a>
+    <a href="/regular-schedule" class="{{ 'active' if active_nav == 'regular-schedule' }}">Regular Schedule <span class="hint">固定班表</span></a>
     <h4>Shared</h4>
     <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave <span class="hint">請假</span></a>
     <a href="/open-shifts" class="{{ 'active' if active_nav == 'open-shifts' }}">Open Shifts <span class="hint">開放時段</span></a>
     <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks <span class="hint">任務</span></a>
     <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards <span class="hint">工時卡</span></a>
+    <a href="/advanced" class="{{ 'active' if active_nav == 'advanced' }}">Advanced <span class="hint">進階設定</span></a>
   {% else %}
     <a href="/availability" class="{{ 'active' if active_nav == 'availability' }}">Availability <span class="hint">選填時段</span></a>
     <a href="/schedule" class="{{ 'active' if active_nav == 'schedule' }}">My Schedule <span class="hint">我的班表</span></a>
@@ -45,36 +45,30 @@
         <button class="hamburger" data-hamburger aria-label="Open menu"><span></span><span></span><span></span></button>
         {% endif %}
         <div class="brand-text">
-          <div class="zh">值班表</div>
-          <div class="en">Duty Roster</div>
+          <div class="en">OIA Duty Roster</div>
         </div>
       </div>
       <div class="header-right">
-        <div class="lang-toggle">
-          <button data-lang-btn="zh">中</button>
-          <button data-lang-btn="en">EN</button>
-        </div>
         {% if current_user.is_authenticated %}
         <div class="userline">
           {{ current_user.email }}<br><span class="role">{{ current_user.role }}</span>
         </div>
         <button class="linklike" data-logout>Log out</button>
         {% endif %}
-        <div class="mark">OIA · MCUT</div>
       </div>
     </div>
     {% if current_user.is_authenticated %}
     <nav class="inline-nav" aria-label="Main navigation">
       {% if current_user.role == 'overseer' %}
-        <a href="/day" class="{{ 'active' if active_nav == 'day' }}">Day</a>
-        <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Week</a>
+        <a href="/week" class="{{ 'active' if active_nav == 'week' }}">Schedule</a>
         <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard</a>
         <a href="/draft" class="{{ 'active' if active_nav == 'draft' }}">Draft</a>
-        <a href="/setup" class="{{ 'active' if active_nav == 'setup' }}">Setup</a>
+        <a href="/regular-schedule" class="{{ 'active' if active_nav == 'regular-schedule' }}">Regular</a>
         <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave</a>
         <a href="/open-shifts" class="{{ 'active' if active_nav == 'open-shifts' }}">Open Shifts</a>
         <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks</a>
         <a href="/timecards" class="{{ 'active' if active_nav == 'timecards' }}">Timecards</a>
+        <a href="/advanced" class="{{ 'active' if active_nav == 'advanced' }}">Advanced</a>
       {% else %}
         <a href="/availability" class="{{ 'active' if active_nav == 'availability' }}">Availability</a>
         <a href="/schedule" class="{{ 'active' if active_nav == 'schedule' }}">My Schedule</a>

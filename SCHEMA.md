@@ -20,6 +20,8 @@ semester ──< student ──< availability >── slot >── assignment
 month ──< selection_window
 month ──< closed_date
 month ──< schedule (draft→committed) ──< assignment
+month ──< regular_slot >── student
+regular_slot_template >── student  (persistent weekly pattern, not month-scoped)
 
 notification_log   ui_string   user(auth)
 ```
@@ -87,6 +89,51 @@ Holidays / breaks — no slots generated.
 
 ---
 
+## Regular schedule (standing slots)
+
+Some students work the same hour every week. Rather than let the solver
+guess a rotation, the overseer can name it directly, and the solver locks it
+in before it runs anything else. Students still log availability every month
+regardless — a regular slot is never assigned unless the student actually
+offers that hour.
+
+### `regular_slot_template`
+The persistent weekly pattern — **not month-scoped**. Edited once by the
+overseer; copied into `regular_slot` whenever a month is populated. Editing
+the template only affects months populated afterward, so a mid-semester
+change never silently rewrites a month already in progress.
+
+| field | type | notes |
+|---|---|---|
+| id | pk | |
+| weekday | int | 0=Mon .. 4=Fri |
+| hour | int | one of the 8 slot hours |
+| state | enum | unavailable / unassigned / assigned |
+| student_id | fk → student null | set only when state=assigned |
+
+`(weekday, hour)` unique.
+
+### `regular_slot`
+One month's instance of the pattern, per `(date, hour)` — the grid the
+overseer actually edits, shown week by week for that month. Populated from
+`regular_slot_template` (fills gaps only — safe to re-run, never clobbers a
+hand edit), then hand-edited freely without touching the template.
+
+| field | type | notes |
+|---|---|---|
+| id | pk | |
+| month_id | fk → month | |
+| date | date | |
+| hour | int | |
+| state | enum | unavailable / unassigned / assigned |
+| student_id | fk → student null | set only when state=assigned |
+
+`(date, hour)` unique. Drives `slot` generation directly (below) and feeds
+the solver's regular-lock pre-pass (SCHEMA §`assignment`, `slot.source`
+notes in `CLAUDE.md` §7 discussion).
+
+---
+
 ## `slot`
 The atomic assignable unit: one date + one hour, one seat.
 
@@ -98,7 +145,11 @@ The atomic assignable unit: one date + one hour, one seat.
 | period | enum | morning / afternoon (derived, for grouping) |
 | state | enum | open (unassigned) / assigned / reopened |
 
-Generated for the month from the calendar minus `closed_date`s. `(date, hour)` unique.
+Generated for the month from the calendar minus `closed_date`s **and** any
+`(date, hour)` whose `regular_slot` is `unavailable` — no slot at all is
+created for those (coverage need varies month to month, not every hour needs
+staffing). Cells with no `regular_slot` row fall back to plain generation
+exactly as before the feature existed. `(date, hour)` unique.
 
 ---
 
@@ -140,11 +191,13 @@ One student in one slot. The scheduled truth.
 | schedule_id | fk → schedule | |
 | slot_id | fk → slot | |
 | student_id | fk → student | |
-| source | enum | solver / manual_edit / claimed (FCFS reopen) |
+| source | enum | solver / manual_edit / claimed (FCFS reopen) / regular_lock |
 | created_at | ts | |
 
 `(schedule_id, slot_id)` unique → one student per slot. A manual edit replaces the
-student on one assignment only (no re-solve).
+student on one assignment only (no re-solve). `regular_lock` marks a standing
+`regular_slot` claim the solver locked in during its pre-pass, before running
+CP-SAT on everything else — see "Regular schedule" above.
 
 ---
 
@@ -217,14 +270,21 @@ Per-hour detail captured at sign-out (hourly even though sign-in is per-run).
 | title_zh | text | |
 | title_en | text null | optional; show both if present, else fallback |
 | description | text null | free-text, single box |
-| frequency | enum | daily / weekly / monthly |
-| interval | int | every N periods (default 1) |
+| frequency | enum | daily / weekly / monthly / unlimited |
+| interval | int | every N periods (default 1); ignored for unlimited |
 | is_active | bool | |
 | reference_s3_key | text null | admin's "what to do" photo (e.g. dirty fridge) |
 | photo_required | bool | if true, completion needs a proof photo |
 
+`unlimited` is for duties that are regular but not cadence-bound — required
+whenever asked in person, any number of times a day, by anyone (e.g. courier
+runs). It skips the once-per-period behaviour below entirely: every
+completion gets its own unique `period_key`, so the task never drops off the
+list and never blocks a second completion the same day.
+
 ### `task_completion`
-Logs a regular task done — and enforces once-per-period.
+Logs a regular task done — and enforces once-per-period (except `unlimited`
+tasks, see above).
 
 | field | type | notes |
 |---|---|---|
@@ -234,11 +294,12 @@ Logs a regular task done — and enforces once-per-period.
 | session_id | fk → attendance_session | |
 | slot_id | fk → slot null | |
 | completed_at | ts | |
-| period_key | text | e.g. "2026-W37" (weekly) / "2026-09-08" (daily) |
+| period_key | text | e.g. "2026-W37" (weekly) / "2026-09-08" (daily) / a random key (unlimited) |
 | proof_s3_key | text null | student's completion photo (e.g. clean fridge) |
 
 `(regular_task_id, period_key)` unique → task drops off the list once done for its
-period (the fridge can't be cleaned 5× in a day).
+period (the fridge can't be cleaned 5× in a day) — moot for `unlimited` tasks,
+whose period_key is never reused.
 
 ### `custom_task`
 | field | type | notes |
@@ -251,6 +312,8 @@ period (the fridge can't be cleaned 5× in a day).
 | status | enum | open / claimed / done |
 | claimed_by | fk → student null | |
 | claimed_at | ts null | |
+| event_date | date null | when set, the task is "due" — banners on the student's
+  sign-in page from that date on, until it's marked done |
 | reference_s3_key | text null | admin's "what to do" photo (e.g. dirty fridge) |
 | photo_required | bool | if true, completion needs a proof photo |
 
@@ -277,7 +340,7 @@ Every notification, gated for once-only delivery (idempotent `/tick`).
 | field | type | notes |
 |---|---|---|
 | id | pk | |
-| type | enum | selection_open / closing_warning / committed / slot_open / no_show |
+| type | enum | selection_open / closing_warning / committed / leave_requested / slot_open / no_show |
 | target | enum | group / individual / overseer |
 | related_type / related_id | text / int | e.g. slot, leave_request, month |
 | sent_at | ts | |
@@ -345,6 +408,10 @@ Fixed UI text, bilingual. Can be a static JSON file rather than a table.
 - Keep `timecard_upload` and `hourly_report` fully separate.
 - `period_key` on `task_completion` makes cadence guarding trivial: compute the key
   from the task's frequency at completion time and rely on the unique index.
+- `regular_slot_template` is the source of truth for the recurring pattern;
+  `regular_slot` rows are a month's copy of it, safe to hand-edit per month
+  without ever mutating the template. Never derive one from the other at
+  read time — `populate` is the only copy point, and it's idempotent.
 - Task images have three roles — `regular_task.reference_s3_key` /
   `custom_task.reference_s3_key` (admin, before), `task_completion.proof_s3_key`
   (student, after), and `timecard_upload.s3_key` (periodic evidence). Keep them in

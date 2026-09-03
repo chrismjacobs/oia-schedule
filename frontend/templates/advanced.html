@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Advanced{% endblock %}
+{% block content %}
+<div id="advanced-app" v-cloak>
+
+  <div class="panel">
+    <h2>Semesters 學期</h2>
+    <p class="hint">The roster changes every semester — create the next one here and mark it
+      active before inviting students. Rarely touched outside roster turnover.</p>
+    <div class="table-scroll">
+      <table class="data">
+        <thead><tr><th>Name</th><th>Starts</th><th>Ends</th><th>Active</th></tr></thead>
+        <tbody>
+          <tr v-for="s in semesters" v-bind:key="s.id">
+            <td>[[ s.name ]]</td><td class="mono">[[ s.starts_on ]]</td><td class="mono">[[ s.ends_on ]]</td><td>[[ s.is_active ? 'yes' : '' ]]</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <form v-on:submit.prevent="createSemester" class="field-row" style="margin-top:10px;">
+      <div class="field"><label>Name</label><input v-model="newSemester.name" required></div>
+      <div class="field"><label>Starts</label><input type="date" v-model="newSemester.starts_on" required></div>
+      <div class="field"><label>Ends</label><input type="date" v-model="newSemester.ends_on" required></div>
+      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+    </form>
+  </div>
+
+  <div class="panel" v-if="settings">
+    <h2>Solver weights 排班權重設定</h2>
+    <div class="field-row">
+      <div class="field" v-for="k in Object.keys(settings.solver_weights)" v-bind:key="k">
+        <label>[[ k ]]</label>
+        <input type="number" v-model.number="settings.solver_weights[k]">
+      </div>
+      <div class="field"><label>Floor hours</label><input type="number" v-model.number="settings.solver_floor_hours"></div>
+    </div>
+    <button v-on:click="saveSettings">Save</button>
+  </div>
+
+  <div class="panel" v-if="settings">
+    <h2>Notification preferences 通知偏好</h2>
+    <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-weight:normal;">
+      <input type="checkbox" v-model="settings.notify_attendance_events" style="width:auto;">
+      Sign-in / sign-out LINE notifications <span class="hint">簽到退通知</span>
+    </label>
+    <p class="hint" style="margin-top:6px;">Fires once per sign-in and once per sign-out. Turn off here if it gets too noisy in the group — everything else (committed schedules, leave, open slots, no-shows) keeps sending regardless.</p>
+    <button style="margin-top:8px;" v-on:click="saveSettings">Save</button>
+  </div>
+
+  <div class="panel">
+    <h2>Demo data 展示資料</h2>
+    <p class="hint">Seeds 9 demo students, a month of availability, and a committed schedule so the app looks populated. Flagged rows only — never touches real data.</p>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button v-bind:disabled="busy" v-on:click="seedDemo">Seed demo data</button>
+      <button class="danger" v-bind:disabled="busy" v-on:click="resetDemo">Reset demo data</button>
+    </div>
+    <p class="hint">[[ demoMessage ]]</p>
+  </div>
+
+  <div class="panel">
+    <h2>Notification test send 通知測試</h2>
+    <p class="hint">Send a one-off message to check LINE/email wiring before relying on it live.</p>
+    <div class="field-row">
+      <div class="field"><label>Backend</label>
+        <select v-model="testBackend">
+          <option value="line">LINE</option>
+          <option value="email">Email</option>
+        </select>
+      </div>
+      <div class="field" v-if="testBackend === 'line'"><label>Target user/group ID (optional — defaults to configured group)</label><input v-model="testTarget"></div>
+    </div>
+    <div class="field"><label>Message</label><textarea v-model="testMessage" rows="2">Test message from OIA Duty Roster.</textarea></div>
+    <button v-bind:disabled="busy" v-on:click="sendTest">Send test</button>
+    <p class="hint">[[ testMessage2 ]]</p>
+  </div>
+
+  <div class="panel">
+    <h2>Run /tick now 手動執行</h2>
+    <p class="hint">Runs everything the external cron does — selection window transitions, no-show flags,
+      forgot-signout flags, and auto-advertising never-filled slots within the lookahead window. Normally fires
+      on its own every few minutes in production; use this to test without waiting.</p>
+    <button v-bind:disabled="busy" v-on:click="runTick">Run tick now</button>
+    <pre class="hint" style="white-space:pre-wrap; margin-top:8px;">[[ tickResult ]]</pre>
+  </div>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      semesters: [], newSemester: { name: "", starts_on: "", ends_on: "" },
+      settings: null,
+      busy: false, demoMessage: "",
+      testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
+      tickResult: "",
+    };
+  },
+  async mounted() {
+    await Promise.all([this.loadSemesters(), this.loadSettings()]);
+  },
+  methods: {
+    async loadSemesters() { this.semesters = await OIA.api.get("/api/admin/semesters"); },
+    async loadSettings() { this.settings = await OIA.api.get("/api/admin/settings"); },
+    async createSemester() {
+      this.busy = true;
+      try {
+        await OIA.api.post("/api/admin/semesters", Object.assign({}, this.newSemester, { is_active: true }));
+        this.newSemester = { name: "", starts_on: "", ends_on: "" };
+        await this.loadSemesters();
+      } finally { this.busy = false; }
+    },
+    async saveSettings() {
+      this.settings = await OIA.api.put("/api/admin/settings", this.settings);
+    },
+    async seedDemo() {
+      this.busy = true; this.demoMessage = "";
+      try {
+        const res = await OIA.api.post("/api/admin/demo/seed");
+        this.demoMessage = "Seeded: " + res.students + " students, month " + res.month.year_month + ".";
+      } catch (e) {
+        this.demoMessage = e.message;
+      } finally { this.busy = false; }
+    },
+    async resetDemo() {
+      this.busy = true; this.demoMessage = "";
+      try {
+        const res = await OIA.api.post("/api/admin/demo/reset");
+        this.demoMessage = "Removed " + res.students_removed + " demo students, " + res.schedules_removed + " demo schedules.";
+      } catch (e) {
+        this.demoMessage = e.message;
+      } finally { this.busy = false; }
+    },
+    async sendTest() {
+      this.busy = true; this.testMessage2 = "";
+      try {
+        await OIA.api.post("/api/test-send", { backend: this.testBackend, target: this.testTarget, message: this.testMessage });
+        this.testMessage2 = "Sent (or logged, if not configured yet).";
+      } catch (e) {
+        this.testMessage2 = e.message;
+      } finally { this.busy = false; }
+    },
+    async runTick() {
+      this.busy = true; this.tickResult = "";
+      try {
+        const res = await OIA.api.post("/api/admin/run-tick");
+        this.tickResult = JSON.stringify(res, null, 2);
+      } catch (e) {
+        this.tickResult = e.message;
+      } finally { this.busy = false; }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#advanced-app");
+</script>
+{% endblock %}

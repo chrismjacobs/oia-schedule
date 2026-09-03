@@ -23,14 +23,7 @@ def register_page(token=None):
 @bp.get("/")
 @page_login_required
 def home():
-    return redirect(url_for("pages.day_page" if current_user.role == "overseer" else "pages.schedule_page"))
-
-
-@bp.get("/day")
-@bp.get("/day/<date_str>")
-@page_overseer_required
-def day_page(date_str=None):
-    return render_template("day.html", active_nav="day", initial_date=date_str or "")
+    return redirect(url_for("pages.week_page" if current_user.role == "overseer" else "pages.schedule_page"))
 
 
 @bp.get("/week")
@@ -51,16 +44,22 @@ def draft_page():
     return render_template("draft.html", active_nav="draft", wide_page=True)
 
 
-@bp.get("/setup")
+@bp.get("/advanced")
 @page_overseer_required
-def setup_page():
-    return render_template("setup.html", active_nav="setup", wide_page=True)
+def advanced_page():
+    return render_template("advanced.html", active_nav="advanced", wide_page=True)
+
+
+@bp.get("/regular-schedule")
+@page_overseer_required
+def regular_schedule_page():
+    return render_template("regular_schedule.html", active_nav="regular-schedule", wide_page=True)
 
 
 @bp.get("/student-history")
 @page_overseer_required
 def student_history_page():
-    return render_template("student_history.html", active_nav="setup")
+    return render_template("student_history.html", active_nav="dashboard")
 
 
 @bp.get("/availability")

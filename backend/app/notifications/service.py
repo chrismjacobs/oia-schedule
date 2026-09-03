@@ -4,6 +4,7 @@ sent-flag on notification_log so a missed/late/doubled /tick self-heals
 from app.extensions import db
 from app.models import NotificationLog
 from app.notifications.backends import get_backend
+from app.utils.settings import get_attendance_notify_enabled
 from app.utils.tz import local_now
 
 
@@ -41,6 +42,18 @@ def notify_committed(month):
     )
 
 
+def notify_leave_requested(leave_request):
+    """Fires the moment a student submits a leave request — before it's
+    approved. Deliberately generic (no name, no reason): it flags the
+    overseer to go review it, and primes students that a slot may open up
+    soon, without exposing anything personal in the shared group."""
+    slot = leave_request.slot
+    notify_once(
+        "leave_requested", "group", "leave_request", leave_request.id,
+        f"[OIA] A leave request came in for {slot.date.isoformat()} {slot.hour}:00 — pending review.",
+    )
+
+
 def notify_slot_open(reopened_slot):
     slot = reopened_slot.slot
     notify_once(
@@ -60,6 +73,26 @@ def notify_closing_warning(month):
     notify_once(
         "closing_warning", "group", "month", month.id,
         f"[OIA] Availability selection for {month.year_month} closes soon — submit your hours.",
+    )
+
+
+def notify_signed_in(session):
+    """Toggle-gated (Advanced > sign-in/out notifications) since this can
+    fire a lot on a busy day — every sign-in, not just once."""
+    if not get_attendance_notify_enabled():
+        return
+    notify_once(
+        "signed_in", "group", "attendance_session", session.id,
+        f"[OIA] {session.student.short_name} signed in.",
+    )
+
+
+def notify_signed_out(session):
+    if not get_attendance_notify_enabled():
+        return
+    notify_once(
+        "signed_out", "group", "attendance_session", session.id,
+        f"[OIA] {session.student.short_name} signed out.",
     )
 
 

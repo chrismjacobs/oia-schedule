@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Week{% endblock %}
+{% block title %}Schedule{% endblock %}
 {% block content %}
 <div id="week-app" v-cloak>
   <section class="pad" style="margin-top:10px;">
@@ -14,28 +14,38 @@
   <section class="pad" v-if="!payload"><p class="hint">Loading…</p></section>
 
   <template v-else>
-    <div class="weekwrap">
-      <table class="grid">
-        <thead>
-          <tr>
-            <th class="h">時 / hr</th>
-            <th v-for="d in dates" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="h in HOURS" v-bind:key="h">
-            <td class="h mono">[[ h ]]:00</td>
-            <td v-for="d in dates" v-bind:key="d + '_' + h"
-                v-bind:class="{ empty: !cell(d, h) || !cell(d, h).assignment }">
-              <span class="cell-tok" v-if="cell(d, h) && cell(d, h).assignment">
-                <oia-token v-bind:student="studentFor(cell(d, h))"></oia-token>
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="weeknote">↔ scroll · colour + shape = one student at a glance</div>
+    <section class="pad" v-if="!visibleWeeks.length"><p class="hint">This month is over — nothing left to show.</p></section>
+
+    <template v-for="(week, wi) in visibleWeeks" v-bind:key="wi">
+      <div class="weeklabel">Week [[ weekNumber(week) ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
+      <div class="weekwrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="h">時 / hr</th>
+              <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="h in HOURS" v-bind:key="h">
+              <td class="h mono">[[ hourLabel(h) ]]</td>
+              <td v-for="d in week" v-bind:key="d + '_' + h"
+                  class="reg-cell" v-bind:class="cellClass(d, h)" v-bind:style="cellStyle(d, h)">
+                <span class="sched-cell" v-if="row(d, h) && row(d, h).student">
+                  <oia-token v-bind:student="row(d, h).student" size="sm"></oia-token>
+                  <span class="sched-name">[[ studentLabel(row(d, h).student) ]]</span>
+                </span>
+                <span class="hint" v-else-if="row(d, h) && row(d, h).advertised">[[ narrow ? 'adv' : 'advertised' ]]</span>
+                <button class="fill-btn" v-else-if="row(d, h)"
+                        v-bind:disabled="advertising === row(d, h).slot.id"
+                        v-on:click="advertise(row(d, h))">[[ narrow ? 'Ad' : 'Advertise' ]]</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+    <div class="weeknote">↔ scroll if needed · colour + shape = one student at a glance · past weeks are hidden</div>
 
     <div class="roster">
       <h3>Roster · 名冊</h3>
@@ -59,28 +69,38 @@ const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { months: [], monthId: null, payload: null, HOURS };
+    return { months: [], monthId: null, payload: null, advertising: null, narrow: false, HOURS };
   },
   computed: {
-    dates() {
-      if (!this.payload) return [];
-      const seen = new Set(), out = [];
-      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); out.push(r.slot.date); } });
-      return out;
-    },
-    cellIndex() {
+    rowsByKey() {
       const map = {};
       if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
       return map;
+    },
+    weeks() {
+      if (!this.payload) return [];
+      const seen = new Set(), dates = [];
+      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
+      return OIA.groupIntoWeeks(dates);
+    },
+    todayStr() {
+      const d = new Date();
+      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    },
+    visibleWeeks() {
+      // A week that has fully ended (its last day is before today) is just
+      // noise for the overseer's live view — drop it.
+      return this.weeks.filter(week => week[week.length - 1] >= this.todayStr);
     },
   },
   watch: {
     async monthId() {
       if (!this.monthId) return;
-      this.payload = await OIA.api.get("/api/schedule/months/" + this.monthId);
+      this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
     },
   },
   async mounted() {
+    OIA.watchNarrow((v) => { this.narrow = v; });
     this.months = await OIA.api.get("/api/admin/months");
     if (this.months.length) {
       const preferred = this.months.find(m => m.state === "running") || this.months[0];
@@ -88,10 +108,35 @@ const app = createApp({
     }
   },
   methods: {
-    cell(date, hour) { return this.cellIndex[date + "_" + hour]; },
-    weekdayLabel(date) { return OIA.weekdayLabel(date); },
-    studentFor(row) {
-      return row.assignment ? this.payload.students[row.assignment.student_id] : null;
+    row(date, hour) { return this.rowsByKey[date + "_" + hour]; },
+    weekdayLabel(d) { return OIA.weekdayLabel(d); },
+    hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
+    weekNumber(week) { return this.weeks.indexOf(week) + 1; },
+    studentLabel(s) {
+      const name = s.english_name || s.chinese_name;
+      return this.narrow ? OIA.shortName(name) : name;
+    },
+    cellClass(d, h) {
+      const r = this.row(d, h);
+      if (!r) return {};
+      if (r.student) return { "sched-flagged": r.status === "flagged", "sched-recorded": r.status === "recorded" };
+      return r.advertised ? { "sched-advertised": true } : { "reg-unavailable": true };
+    },
+    cellStyle(d, h) {
+      const r = this.row(d, h);
+      if (r && r.student && r.status === "scheduled") return { background: r.student.colour + "22" };
+      return {};
+    },
+    async advertise(row) {
+      this.advertising = row.slot.id;
+      try {
+        await OIA.api.post("/api/leave/advertise", { slot_id: row.slot.id });
+        this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        this.advertising = null;
+      }
     },
   },
 });

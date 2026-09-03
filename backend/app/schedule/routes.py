@@ -26,8 +26,10 @@ def generate_draft(month_id):
     db.session.add(schedule)
     db.session.flush()
 
+    locked_slot_ids = set(meta.get("regular_locked_slot_ids", []))
     for slot_id, student_id in result.items():
-        db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot_id, student_id=student_id, source="solver"))
+        source = "regular_lock" if slot_id in locked_slot_ids else "solver"
+        db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot_id, student_id=student_id, source=source))
 
     assigned_slot_ids = set(result.keys())
     for slot in Slot.query.filter_by(month_id=month.id).all():
@@ -85,6 +87,48 @@ def my_assignments():
         d["slot"] = a.slot.to_dict()
         out.append(d)
     return jsonify(out)
+
+
+@bp.get("/months")
+@login_required_api
+def list_schedule_months():
+    """Months worth showing on the student 'My Schedule' grid — only ones
+    with an actual committed schedule. Draft/setup/etc. stay overseer-only
+    (see /schedule/months/<id> below, which the Draft page uses instead)."""
+    rows = (
+        db.session.query(Month)
+        .join(Schedule, Schedule.month_id == Month.id)
+        .filter(Schedule.status == "committed")
+        .distinct()
+        .order_by(Month.year_month.desc())
+        .all()
+    )
+    return jsonify([m.to_dict() for m in rows])
+
+
+@bp.get("/months/<int:month_id>/team")
+@login_required_api
+def team_schedule(month_id):
+    """Read-only whole-team view for the student 'My Schedule' grid — every
+    student's assignments, not just the caller's own. Committed schedule
+    only: unlike /months/<id> below (draft-visible, for overseer Draft
+    review) this never shows students a not-yet-committed proposal."""
+    Month.query.get_or_404(month_id)
+    schedule = (Schedule.query.filter_by(month_id=month_id, status="committed")
+                .order_by(Schedule.generated_at.desc()).first())
+    slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
+    assignment_by_slot = {}
+    if schedule:
+        for a in Assignment.query.filter_by(schedule_id=schedule.id).all():
+            assignment_by_slot[a.slot_id] = a
+    return jsonify({
+        "month_id": month_id,
+        "students": {s.id: s.to_dict() for s in Student.query.filter_by(is_active=True).all()},
+        "slots": [
+            {"slot": s.to_dict(), "assignment": assignment_by_slot[s.id].to_dict() if s.id in assignment_by_slot else None}
+            for s in slots
+        ],
+    })
 
 
 @bp.get("/months/<int:month_id>")

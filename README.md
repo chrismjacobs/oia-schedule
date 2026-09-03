@@ -145,9 +145,9 @@ backend/
 frontend/
   templates/
     base.html                shared shell: header, hamburger drawer, CDN Vue, i18n toggle
-    login.html register.html day.html week.html dashboard.html draft.html
-    setup.html availability.html schedule.html attendance.html leave.html
-    tasks.html timecards.html
+    login.html register.html week.html dashboard.html draft.html
+    advanced.html regular_schedule.html availability.html schedule.html attendance.html
+    leave.html tasks.html timecards.html
   static/
     css/app.css               design tokens + components ported from roster-mockup.html
     js/

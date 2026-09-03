@@ -200,12 +200,19 @@ is an acceptable fallback if OR-Tools is heavy on the free instance; CP-SAT pref
 ## 10. Tasks
 
 - **Regular tasks** — admin-defined, with a **cadence** (daily/weekly/monthly ×
-  interval). **Done only once per period** — once the fridge is done this week it
-  drops off until next week; can't be repeated 5×/day. Completions log to the doer.
-  A task may include an optional **reference photo** the admin uploads (e.g. the
-  dirty fridge), shown to the student as what needs doing.
-- **Custom tasks** — admin adds ad-hoc; **students claim** them. Shown at sign-out.
-  Also support an optional admin reference photo.
+  interval, or **unlimited**). **Done only once per period** — once the fridge is
+  done this week it drops off until next week; can't be repeated 5×/day.
+  **Unlimited** is the exception: a regular *duty* rather than a cadence — required
+  whenever asked in person, any number of times a day, by anyone (e.g. courier
+  runs) — it never drops off and never blocks a repeat. Completions log to the
+  doer. A task may include an optional **reference photo** the admin uploads (e.g.
+  the dirty fridge), shown to the student as what needs doing.
+- **Custom tasks** — admin adds ad-hoc, ticked (and thereby claimed) **at
+  sign-out**, same as regular tasks — there's no separate advance-claim step; the
+  Tasks page is a read-only explainer of what each task involves, not an action
+  screen. A custom task can optionally carry an **event_date** — once that date
+  arrives it **banners on the sign-in page** for every student until it's marked
+  done, in addition to its normal listing on the Tasks page.
 - **Proof photos** — when a student completes any task at sign-out, they may upload
   a **completion photo** (e.g. the clean fridge) as evidence, stored in S3. Optional
   by default; the admin can mark a task **photo-required** so it can't be ticked done
@@ -224,7 +231,10 @@ them into one.
 
 ## 12. Notifications
 
-**Event-driven:** committed schedule (on commit); slot open (on reopen).
+**Event-driven:** committed schedule (on commit); leave requested (on submit — generic,
+no name or reason, so it both flags the overseer to review and primes students that a
+slot may open); slot open (on reopen — manual, approved-leave, or auto_unfilled all
+fire the same way).
 **Time-driven** (need §13): selection window opens; closing warning (~24h before
 close); no-show warning (slot start + grace, if scheduled and not signed in).
 
@@ -258,10 +268,10 @@ free instance-hours/workspace/month.** Therefore:
 
 ## 14. Bilingual model
 
-**The app is bilingual; content is as bilingual as whoever enters it chooses.**
+**Content is as bilingual as whoever enters it chooses; fixed UI chrome (nav, headers,
+buttons) is English-only** — a `zh`/`en` toggle was tried and dropped as dead weight
+nobody used, so don't rebuild it without a real request.
 
-- **Fixed UI text** — fully bilingual, **baked in via a `zh`/`en` dictionary/i18n
-  file**, not hard-coded strings (also future-proofs a language toggle).
 - **Structured named content** (task titles; student names already have zh/en
   fields) — **two fields, 中文 + English, English optional.** Show both if present,
   else fall back to whichever is filled.
@@ -288,10 +298,16 @@ magenta `#C2185B`, brown `#8D6E63`.
 
 ## 16. Views and dashboard
 
-- **Day view** — overseer's default landing; the day's slots on a time rail with
-  student token + name + status. (Phone-first.)
-- **Week / month grid** — the global colour+shape view; hours as rows, days as
-  columns, horizontally scrollable on mobile; uncovered cells visibly hatched.
+- **Schedule view** — overseer's default landing; one tab, not separate Day and
+  Week tabs. The colour+shape grid (hours as rows, days as columns), grouped and
+  labelled week by week, with live status per cell (scheduled / recorded /
+  no-show) and an **Advertise** button on any uncovered slot. Weeks that have
+  already fully ended are simply not shown — only the current week and what's
+  ahead. On narrow screens the grid doesn't switch to a different layout or
+  scroll sideways — cell text abbreviates instead (student name to 2 letters,
+  "8:00" to "8", etc.) so the same grid always fits.
+- **Draft review** — same week-by-week grid, pre-commit: each cell is an
+  editable dropdown listing only the students available for that hour (§7).
 - **Overseer dashboard** — scheduled-vs-recorded gaps, no-shows, leave patterns
   (too-often / too-late), uncovered slots, task completion.
 

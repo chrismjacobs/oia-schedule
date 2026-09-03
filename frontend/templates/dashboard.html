@@ -2,7 +2,33 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <div id="dash-app" v-cloak>
-  <section class="pad" style="margin-top:10px;">
+  <div class="panel" style="margin-top:10px;">
+    <h2>Students 學生</h2>
+    <div class="table-scroll">
+      <table class="data">
+        <thead><tr><th>Name</th><th>ID</th><th>Token</th><th>Active</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="s in students" v-bind:key="s.id">
+            <td>[[ s.chinese_name ]] [[ s.english_name ]] <span class="badge uncovered" v-if="s.is_demo">demo</span></td>
+            <td class="mono">[[ s.student_id ]]</td>
+            <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
+            <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
+            <td>
+              <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
+              <a v-bind:href="'/student-history?student_id=' + s.id" class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none; margin-left:4px;">History</a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <form v-on:submit.prevent="sendInvite" class="field-row" style="margin-top:10px;">
+      <div class="field"><label>Invite a student (email)</label><input type="email" v-model="inviteEmail" required></div>
+      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Send invite</button></div>
+    </form>
+    <p class="hint" v-if="inviteResult">Invite link: <span class="mono">/register/[[ inviteResult.invite_token ]]</span></p>
+  </div>
+
+  <section class="pad">
     <div class="field" style="max-width:260px;">
       <label>Month 月份</label>
       <select v-model.number="monthId">
@@ -87,10 +113,14 @@ const { createApp } = Vue;
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { months: [], monthId: null, data: null, loading: false };
+    return {
+      months: [], monthId: null, data: null, loading: false,
+      students: [], inviteEmail: "", inviteResult: null, busy: false,
+    };
   },
   watch: { monthId() { this.load(); } },
   async mounted() {
+    await this.loadStudents();
     this.months = await OIA.api.get("/api/admin/months");
     if (this.months.length) {
       const preferred = this.months.find(m => m.state === "running") || this.months[0];
@@ -110,6 +140,19 @@ const app = createApp({
     studentLabel(row) {
       if (!row.student) return "#" + row.student_id;
       return OIA.bilingual(row.student.chinese_name, row.student.english_name);
+    },
+    async loadStudents() { this.students = await OIA.api.get("/api/admin/students"); },
+    async sendInvite() {
+      this.busy = true; this.inviteResult = null;
+      try {
+        this.inviteResult = await OIA.api.post("/api/admin/invites", { email: this.inviteEmail });
+        this.inviteEmail = "";
+        await this.loadStudents();
+      } finally { this.busy = false; }
+    },
+    async toggleStudentActive(s) {
+      await OIA.api.patch("/api/admin/students/" + s.id, { is_active: !s.is_active });
+      await this.loadStudents();
     },
   },
 });

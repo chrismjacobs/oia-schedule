@@ -4,32 +4,113 @@
 <div id="sched-app" v-cloak>
   <section class="pad" style="margin-top:10px;">
     <h2>My Schedule <span class="hint">我的班表</span></h2>
-    <p v-if="loading" class="hint">Loading…</p>
-    <p v-else-if="!rows.length" class="hint">No shifts scheduled yet.</p>
-    <div class="table-scroll" v-else>
-      <table class="data">
-        <thead><tr><th>Date</th><th>Hour</th><th>Source</th></tr></thead>
-        <tbody>
-          <tr v-for="r in rows" v-bind:key="r.id">
-            <td class="mono">[[ r.slot.date ]]</td>
-            <td class="mono">[[ r.slot.hour ]]:00</td>
-            <td>[[ r.source ]]</td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="field" style="max-width:260px;">
+      <label>Month 月份</label>
+      <select v-model.number="monthId">
+        <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]]</option>
+      </select>
     </div>
   </section>
+
+  <section class="pad" v-if="!months.length"><p class="hint">No committed schedule yet.</p></section>
+  <section class="pad" v-else-if="!payload"><p class="hint">Loading…</p></section>
+
+  <template v-else>
+    <template v-for="(week, wi) in weeks" v-bind:key="wi">
+      <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
+      <div class="weekwrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="h">時 / hr</th>
+              <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="h in HOURS" v-bind:key="h">
+              <td class="h mono">[[ hourLabel(h) ]]</td>
+              <td v-for="d in week" v-bind:key="d+'_'+h"
+                  class="reg-cell" v-bind:class="cellClass(d, h)" v-bind:style="cellStyle(d, h)"
+                  v-bind:title="row(d,h) && row(d,h).assignment ? null : 'Click to view open shifts'"
+                  style="cursor:pointer;" v-on:click="onCellClick(d, h)">
+                <span class="sched-name-only" v-if="row(d,h) && row(d,h).assignment">[[ studentLabel(students[row(d,h).assignment.student_id]) ]]</span>
+                <span class="open-label" v-else-if="row(d,h)">Open</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+    <div class="weeknote">your shifts stand out in full colour, everyone else is greyed · open cells (red) → tap to claim on Open Shifts</div>
+  </template>
 </div>
 {% endblock %}
 {% block page_script %}
 <script>
 const { createApp } = Vue;
+const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
+const myStudentId = (window.CURRENT_USER && window.CURRENT_USER.student) ? window.CURRENT_USER.student.id : null;
 const app = createApp({
   delimiters: ['[[', ']]'],
-  data() { return { rows: [], loading: true }; },
+  data() {
+    return { months: [], monthId: null, payload: null, narrow: false, HOURS };
+  },
+  computed: {
+    students() { return this.payload ? this.payload.students : {}; },
+    rowsByKey() {
+      const map = {};
+      if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
+      return map;
+    },
+    weeks() {
+      if (!this.payload) return [];
+      const seen = new Set(), dates = [];
+      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
+      return OIA.groupIntoWeeks(dates);
+    },
+  },
+  watch: {
+    async monthId() {
+      if (!this.monthId) return;
+      this.payload = await OIA.api.get("/api/schedule/months/" + this.monthId + "/team");
+    },
+  },
   async mounted() {
-    try { this.rows = await OIA.api.get("/api/schedule/mine"); }
-    finally { this.loading = false; }
+    OIA.watchNarrow((v) => { this.narrow = v; });
+    this.months = await OIA.api.get("/api/schedule/months");
+    if (this.months.length) {
+      const preferred = this.months.find(m => m.state === "running") || this.months[0];
+      this.monthId = preferred.id;
+    }
+  },
+  methods: {
+    row(date, hour) { return this.rowsByKey[date + "_" + hour]; },
+    weekdayLabel(d) { return OIA.weekdayLabel(d); },
+    hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
+    studentLabel(s) {
+      if (!s) return "";
+      const name = s.english_name || s.chinese_name;
+      return this.narrow ? OIA.shortName(name) : name;
+    },
+    cellClass(d, h) {
+      const r = this.row(d, h);
+      if (!r) return {};
+      if (!r.assignment) return { "sched-open": true };
+      const mine = myStudentId && r.assignment.student_id === myStudentId;
+      return { "sched-other": !mine };
+    },
+    cellStyle(d, h) {
+      const r = this.row(d, h);
+      if (!r || !r.assignment) return {};
+      const mine = myStudentId && r.assignment.student_id === myStudentId;
+      if (!mine) return {};
+      const s = this.students[r.assignment.student_id];
+      return s ? { background: s.colour, color: "#fff" } : {};
+    },
+    onCellClick(d, h) {
+      const r = this.row(d, h);
+      if (r && !r.assignment) window.location.href = "/open-shifts";
+    },
   },
 });
 OIA.registerGlobals(app);
