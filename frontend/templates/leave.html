@@ -19,7 +19,8 @@
           <button v-bind:disabled="busy" type="submit">Submit</button>
         </form>
         <p class="hint">[[ message ]]</p>
-        <p class="hint">Once approved, that slot opens up on <a href="/open-shifts">Open Shifts</a> for someone else to claim.</p>
+        <p class="hint">Once approved you're off that shift. The hour usually opens up on
+          <a href="/open-shifts">Open Shifts</a> for someone else to claim.</p>
       </div>
 
       <div class="panel">
@@ -41,7 +42,7 @@
         <h3>Pending requests</h3>
         <p class="hint" v-if="!adminRequests.length">None</p>
         <table class="data" v-else>
-          <thead><tr><th>Student</th><th>Slot</th><th>Reason</th><th>Lead (h)</th><th></th></tr></thead>
+          <thead><tr><th>Student</th><th>Slot</th><th>Reason</th><th>Lead (h)</th><th>Advertise</th><th></th></tr></thead>
           <tbody>
             <tr v-for="r in adminRequests" v-bind:key="r.id">
               <td>[[ r.student.english_name || r.student.chinese_name ]]</td>
@@ -49,14 +50,20 @@
               <td>[[ r.reason ]]</td>
               <td class="mono">[[ r.lead_time_hours ]]</td>
               <td>
-                <button v-on:click="decide(r.id, 'approved')">Approve</button>
-                <button class="danger" v-on:click="decide(r.id, 'denied')">Deny</button>
+                <label class="inline-check" v-bind:for="'adv-' + r.id">
+                  <input type="checkbox" v-bind:id="'adv-' + r.id" v-model="advertiseOnApprove[r.id]">
+                  <span>Open it up</span>
+                </label>
               </td>
+              <td><button v-bind:disabled="busy" v-on:click="approve(r)">Approve</button></td>
             </tr>
           </tbody>
         </table>
-        <p class="hint">Approving opens the slot on <a href="/open-shifts">Open Shifts</a> automatically. If a student
-          takes leave without filing a request here, use the Advertise button on that slot in Day view instead.</p>
+        <p class="hint">There's no Deny — a student who can't come, can't come. The only choice is whether the freed
+          hour goes onto <a href="/open-shifts">Open Shifts</a> for someone else to claim. Leave "Open it up" ticked
+          for that (the usual case); untick it to release the student but keep the hour off the board — you can still
+          advertise it later from the 📢 icon on the Schedule grid.</p>
+        <p class="error-text" v-if="adminMessage">[[ adminMessage ]]</p>
       </div>
     </template>
   </section>
@@ -72,7 +79,11 @@ const app = createApp({
       isStudent: CURRENT_USER && CURRENT_USER.role === "student",
       isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
       mySlots: [], myRequests: [], adminRequests: [],
-      slotId: "", reason: "", busy: false, message: "",
+      // Per-request "put the freed hour on Open Shifts" choice, keyed by
+      // request id. Ticked by default — that's the common case; the overseer
+      // unticks the exceptions.
+      advertiseOnApprove: {},
+      slotId: "", reason: "", busy: false, message: "", adminMessage: "",
     };
   },
   async mounted() {
@@ -91,6 +102,11 @@ const app = createApp({
     },
     async loadAdmin() {
       this.adminRequests = await OIA.api.get("/api/leave/admin?status=pending");
+      const choices = {};
+      this.adminRequests.forEach(r => {
+        choices[r.id] = this.advertiseOnApprove[r.id] !== undefined ? this.advertiseOnApprove[r.id] : true;
+      });
+      this.advertiseOnApprove = choices;
     },
     async submitRequest() {
       this.busy = true; this.message = "";
@@ -103,9 +119,17 @@ const app = createApp({
         this.message = e.message;
       } finally { this.busy = false; }
     },
-    async decide(id, status) {
-      await OIA.api.patch("/api/leave/admin/" + id, { status });
-      await this.loadAdmin();
+    async approve(r) {
+      this.busy = true; this.adminMessage = "";
+      try {
+        await OIA.api.patch("/api/leave/admin/" + r.id, {
+          status: "approved",
+          advertise: this.advertiseOnApprove[r.id] !== false,
+        });
+        await this.loadAdmin();
+      } catch (e) {
+        this.adminMessage = e.message;
+      } finally { this.busy = false; }
     },
   },
 });

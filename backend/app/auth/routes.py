@@ -1,16 +1,12 @@
-import re
-
 from flask import jsonify, request
 from flask_login import login_user, logout_user, current_user
 
 from app.auth import bp
 from app.extensions import db
-from app.models import User, Student, Semester
+from app.models import User, Student, Semester, STUDENT_ID_RE
 from app.utils.identity import assign_token
 from app.utils.decorators import login_required_api
 from app.utils.tz import local_now
-
-STUDENT_ID_RE = re.compile(r"^[0-9]{8}$")
 
 
 @bp.get("/invite/<token>")

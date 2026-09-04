@@ -8,7 +8,7 @@ from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
     RegularSlotTemplate, RegularSlot,
-    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES,
+    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES, STUDENT_ID_RE,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
@@ -80,6 +80,9 @@ def list_students():
     for s in students:
         d = s.to_dict()
         d["has_account"] = s.user is not None
+        # Overseer-only, so it's added here rather than in Student.to_dict(),
+        # which is also what students receive in the roster/team views.
+        d["insurance_number"] = s.insurance_number
         out.append(d)
     return jsonify(out)
 
@@ -109,14 +112,47 @@ def create_invite():
 def update_student(student_id):
     student = Student.query.get_or_404(student_id)
     data = request.get_json(force=True) or {}
+
+    # Validate everything before touching the object, so a rejected field
+    # can't leave a half-applied edit behind.
+    new_student_id = None
+    if "student_id" in data:
+        raw = (data["student_id"] or "").strip()
+        if not STUDENT_ID_RE.match(raw):
+            return jsonify({"error": "invalid_student_id",
+                            "message": "Student ID must be exactly 8 digits"}), 400
+        clash = Student.query.filter(Student.student_id == raw, Student.id != student.id).first()
+        if clash:
+            return jsonify({"error": "student_id_taken",
+                            "message": "Another student already has that ID"}), 409
+        new_student_id = raw
+
+    new_insurance = None
+    if "insurance_number" in data:
+        # Free text: the insurer's format isn't ours to police, and a wrong
+        # guess at a pattern would just block a legitimate number. Blank
+        # clears it back to "not on record".
+        raw = (data["insurance_number"] or "").strip()
+        if len(raw) > 32:
+            return jsonify({"error": "insurance_number_too_long",
+                            "message": "Insurance number is limited to 32 characters"}), 400
+        new_insurance = raw or None
+
+    if new_student_id is not None:
+        student.student_id = new_student_id
+    if "insurance_number" in data:
+        student.insurance_number = new_insurance
     if "is_active" in data:
         student.is_active = bool(data["is_active"])
     if "colour" in data:
         student.colour = data["colour"]
     if "shape" in data:
         student.shape = data["shape"]
+
     db.session.commit()
-    return jsonify(student.to_dict())
+    out = student.to_dict()
+    out["insurance_number"] = student.insurance_number
+    return jsonify(out)
 
 
 # ---------------- Months ----------------

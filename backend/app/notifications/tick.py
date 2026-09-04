@@ -121,6 +121,8 @@ def _auto_advertise_unfilled_slots(now):
     assigned_slot_ids = {
         a.slot_id for a in Assignment.query.filter(Assignment.schedule_id.in_(schedule_ids)).all()
     }
+    # Deliberately unfiltered: a retracted row counts as "already handled" too,
+    # so an offer the overseer withdrew doesn't reappear on the next tick.
     already_reopened_slot_ids = {r.slot_id for r in ReopenedSlot.query.all()}
 
     candidates = Slot.query.filter(

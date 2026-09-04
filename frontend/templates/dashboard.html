@@ -6,11 +6,28 @@
     <h2>Students 學生</h2>
     <div class="table-scroll">
       <table class="data">
-        <thead><tr><th>Name</th><th>ID</th><th>Token</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>ID</th><th>Insurance 勞保</th><th>Token</th><th>Active</th><th></th></tr></thead>
         <tbody>
           <tr v-for="s in students" v-bind:key="s.id">
             <td>[[ s.chinese_name ]] [[ s.english_name ]] <span class="badge uncovered" v-if="s.is_demo">demo</span></td>
-            <td class="mono">[[ s.student_id ]]</td>
+            <td class="edit-cell">
+              <input class="mono" v-model="s.student_id" placeholder="8 digits"
+                     maxlength="8" inputmode="numeric" size="8"
+                     v-bind:disabled="saving === key(s, 'student_id')"
+                     v-bind:aria-label="'Student ID for ' + (s.english_name || s.chinese_name)"
+                     v-on:change="saveField(s, 'student_id')" v-on:keyup.enter="$event.target.blur()">
+              <span class="save-flag" v-if="flags[key(s, 'student_id')]"
+                    v-bind:class="{ bad: flags[key(s, 'student_id')] !== 'saved' }">[[ flags[key(s, 'student_id')] ]]</span>
+            </td>
+            <td class="edit-cell">
+              <input class="mono" v-model="s.insurance_number" placeholder="—"
+                     maxlength="32" size="15"
+                     v-bind:disabled="saving === key(s, 'insurance_number')"
+                     v-bind:aria-label="'Insurance number for ' + (s.english_name || s.chinese_name)"
+                     v-on:change="saveField(s, 'insurance_number')" v-on:keyup.enter="$event.target.blur()">
+              <span class="save-flag" v-if="flags[key(s, 'insurance_number')]"
+                    v-bind:class="{ bad: flags[key(s, 'insurance_number')] !== 'saved' }">[[ flags[key(s, 'insurance_number')] ]]</span>
+            </td>
             <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
             <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
             <td>
@@ -116,6 +133,11 @@ const app = createApp({
     return {
       months: [], monthId: null, data: null, loading: false,
       students: [], inviteEmail: "", inviteResult: null, busy: false,
+      // Student ID and insurance number save on blur rather than behind a
+      // Save button — they're single values transcribed off a form, and a
+      // per-cell flag is enough feedback that it landed. `originals` lets a
+      // rejected edit snap back to what the server actually holds.
+      saving: null, flags: {}, originals: {},
     };
   },
   watch: { monthId() { this.load(); } },
@@ -141,7 +163,51 @@ const app = createApp({
       if (!row.student) return "#" + row.student_id;
       return OIA.bilingual(row.student.chinese_name, row.student.english_name);
     },
-    async loadStudents() { this.students = await OIA.api.get("/api/admin/students"); },
+    async loadStudents() {
+      this.students = await OIA.api.get("/api/admin/students");
+      const snap = {};
+      this.students.forEach(s => {
+        snap[s.id] = { student_id: s.student_id, insurance_number: s.insurance_number };
+      });
+      this.originals = snap;
+    },
+    key(s, field) { return s.id + ":" + field; },
+    setFlag(k, text) { this.flags = Object.assign({}, this.flags, { [k]: text }); },
+    clearFlag(k) {
+      const next = Object.assign({}, this.flags);
+      delete next[k];
+      this.flags = next;
+    },
+    async saveField(s, field) {
+      const k = this.key(s, field);
+      const original = (this.originals[s.id] || {})[field] || null;
+      if ((s[field] || null) === original) { this.clearFlag(k); return; }
+
+      this.saving = k;
+      this.setFlag(k, "saving…");
+      try {
+        const updated = await OIA.api.patch("/api/admin/students/" + s.id,
+          { [field]: s[field] || "" });
+        s[field] = updated[field];
+        this.originals[s.id][field] = updated[field];
+        this.setFlag(k, "saved");
+        setTimeout(() => this.clearFlag(k), 1800);
+      } catch (e) {
+        // Put the field back to what the server holds, so the row never sits
+        // there showing a value that wasn't accepted.
+        s[field] = original;
+        this.setFlag(k, this.fieldError(e));
+      } finally {
+        this.saving = null;
+      }
+    },
+    fieldError(e) {
+      const code = (e.payload && e.payload.error) || e.message;
+      if (code === "student_id_taken") return "ID already in use";
+      if (code === "invalid_student_id") return "must be 8 digits";
+      if (code === "insurance_number_too_long") return "too long (max 32)";
+      return (e.payload && e.payload.message) || e.message;
+    },
     async sendInvite() {
       this.busy = true; this.inviteResult = null;
       try {

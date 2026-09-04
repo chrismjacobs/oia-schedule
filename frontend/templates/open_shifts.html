@@ -23,7 +23,19 @@
           <button class="secondary" v-on:click="confirming = null">Cancel</button>
         </div>
       </template>
+
+      <template v-if="isOverseer">
+        <button class="secondary" v-if="retracting !== s.id" v-on:click="retracting = s.id">Retract</button>
+        <div v-else style="text-align:right;">
+          <button class="danger" v-bind:disabled="busy" v-on:click="retract(s)">Confirm retract</button>
+          <button class="secondary" v-on:click="retracting = null">Cancel</button>
+        </div>
+      </template>
     </div>
+    <p class="hint" v-if="isOverseer && shifts.length" style="margin-top:10px;">
+      Retracting takes the hour back off the board — it goes back to uncovered, and an approved
+      leave request behind it stays approved. Only possible while nobody has claimed it.
+    </p>
     <p class="error-text" v-if="message">[[ message ]]</p>
   </section>
 </div>
@@ -35,8 +47,9 @@ const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
-      shifts: [], loading: true, busy: false, confirming: null, message: "",
+      shifts: [], loading: true, busy: false, confirming: null, retracting: null, message: "",
       isStudent: CURRENT_USER && CURRENT_USER.role === "student",
+      isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
     };
   },
   async mounted() { await this.load(); },
@@ -61,6 +74,20 @@ const app = createApp({
       } catch (e) {
         this.message = e.message === "already_claimed_or_not_found"
           ? "Someone else already claimed this one."
+          : e.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+    async retract(s) {
+      this.busy = true; this.message = "";
+      try {
+        await OIA.api.del("/api/leave/reopened/" + s.id);
+        this.retracting = null;
+        await this.load();
+      } catch (e) {
+        this.message = e.message === "already_claimed"
+          ? "Someone claimed this one first — it's a scheduled shift now, edit it on the schedule grid."
           : e.message;
       } finally {
         this.busy = false;

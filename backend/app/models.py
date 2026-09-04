@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from flask_login import UserMixin
@@ -18,6 +19,11 @@ STUDENT_PALETTE = [
     "#8D6E63",  # brown
 ]
 STUDENT_SHAPES = ["circle", "triangle", "square", "diamond"]
+
+# 8 digits, numeric only, no letter prefix (CLAUDE.md #2). Lives here rather
+# than in one blueprint because two places enforce it: registration
+# (auth/routes.py) and the overseer's inline edit (admin/routes.py).
+STUDENT_ID_RE = re.compile(r"^[0-9]{8}$")
 
 SLOT_HOURS = [8, 9, 10, 11, 13, 14, 15, 16]  # 1-hour slots, Mon-Fri (CLAUDE.md #4)
 
@@ -55,6 +61,11 @@ class Student(db.Model):
     student_id = db.Column(db.String(8), nullable=False, unique=True)
     colour = db.Column(db.String(7), nullable=False)
     shape = db.Column(db.String(16), nullable=False)
+    # Insurance (勞保) number. Admin-managed only: not captured at registration
+    # and deliberately absent from to_dict() — that payload goes to students in
+    # the team schedule and roster views, and this is nobody's business but the
+    # overseer's. Served only by the overseer-gated /api/admin/students.
+    insurance_number = db.Column(db.String(32), nullable=True)
     line_user_id = db.Column(db.String(64), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)  # seeded row — "Reset demo data" deletes these
@@ -64,8 +75,9 @@ class Student(db.Model):
     user = db.relationship("User", back_populates="student", uselist=False)
 
     __table_args__ = (
-        # 8-digit numeric student_id is validated in app code (auth/routes.py), not a DB
-        # check constraint — SQLite (the v1 target) has no portable regex constraint syntax.
+        # 8-digit numeric student_id is validated in app code (STUDENT_ID_RE above),
+        # not a DB check constraint — SQLite (the v1 target) has no portable regex
+        # constraint syntax. Uniqueness *is* enforced by the column, below.
         db.UniqueConstraint("semester_id", "colour", "shape", name="uq_student_token_per_semester"),
     )
 
@@ -346,7 +358,12 @@ class ReopenedSlot(db.Model):
     an approved leave request (leave_request_id set), the /tick job noticing
     a never-filled committed slot as its date approaches (source=auto_unfilled),
     or the overseer manually advertising an uncovered slot — e.g. leave taken
-    off the books, without a LeaveRequest (source=manual)."""
+    off the books, without a LeaveRequest (source=manual).
+
+    Retracting one (overseer pulls the offer back before anyone claims it)
+    stamps `retracted_at` rather than deleting the row: /tick's auto-advertise
+    skips any slot that already has a reopened_slot row, so the tombstone is
+    what stops it from immediately re-advertising what was just withdrawn."""
     __tablename__ = "reopened_slot"
     id = db.Column(db.Integer, primary_key=True)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
@@ -355,6 +372,7 @@ class ReopenedSlot(db.Model):
     opened_at = db.Column(db.DateTime, nullable=False, default=local_now)
     claimed_by = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)
     claimed_at = db.Column(db.DateTime, nullable=True)
+    retracted_at = db.Column(db.DateTime, nullable=True)  # withdrawn by the overseer, never claimed
 
     slot = db.relationship("Slot")
     leave_request = db.relationship("LeaveRequest")
@@ -369,6 +387,7 @@ class ReopenedSlot(db.Model):
             "opened_at": self.opened_at.isoformat(),
             "claimed_by": self.claimed_by,
             "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
+            "retracted_at": self.retracted_at.isoformat() if self.retracted_at else None,
         }
 
 

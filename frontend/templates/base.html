@@ -11,6 +11,8 @@
 
 {% if current_user.is_authenticated %}
 <div class="drawer-backdrop" data-drawer-backdrop></div>
+{# One nav, two behaviours: a slide-in drawer on narrow screens, pinned open
+   as a sidebar from 1024px up (see app.css). Not a third copy of the links. #}
 <nav class="drawer" data-drawer aria-label="Main navigation">
   <button class="close-drawer" data-drawer-close aria-label="Close menu">&times;</button>
   <h4>OIA · MCUT</h4>
@@ -19,7 +21,6 @@
     <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard <span class="hint">總覽</span></a>
     <a href="/draft" class="{{ 'active' if active_nav == 'draft' }}">Draft review <span class="hint">草案審閱</span></a>
     <a href="/regular-schedule" class="{{ 'active' if active_nav == 'regular-schedule' }}">Regular Schedule <span class="hint">固定班表</span></a>
-    <h4>Shared</h4>
     <a href="/leave" class="{{ 'active' if active_nav == 'leave' }}">Leave <span class="hint">請假</span></a>
     <a href="/open-shifts" class="{{ 'active' if active_nav == 'open-shifts' }}">Open Shifts <span class="hint">開放時段</span></a>
     <a href="/tasks" class="{{ 'active' if active_nav == 'tasks' }}">Tasks <span class="hint">任務</span></a>

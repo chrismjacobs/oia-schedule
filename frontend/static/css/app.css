@@ -22,6 +22,7 @@
   --urgent-bg: #FBEAE7;
   --avail-blue: #2563EB;  /* plain open/shared hours on the availability grid */
   --avail-blue-bg: #EAF1FB;
+  --sidebar-w: 232px;     /* pinned-open nav from 1024px up */
 }
 
 [v-cloak] { display: none; }
@@ -100,6 +101,32 @@ nav.inline-nav a.active, nav.inline-nav a:hover, nav.inline-nav button.navlink:h
   .hamburger { display: flex; }
   nav.inline-nav { display: none; }
 }
+
+/* Wide screens: the same drawer, pinned open as a permanent sidebar. A
+   standing list of destinations beats a row of tabs once there's room for it.
+   The inline tab row and the hamburger both stand down; below this width
+   nothing changes.
+
+   1200px, not 1024: the sidebar costs --sidebar-w, and the wide pages
+   (Schedule, Dashboard, Draft, Regular, Availability, Advanced) want 980px.
+   Switching any earlier would squeeze them and start the week grids
+   scrolling sideways to pay for the nav. */
+@media (min-width: 1200px) {
+  .drawer {
+    display: block; transform: none; box-shadow: none;
+    width: var(--sidebar-w); max-width: var(--sidebar-w);
+    border-right: 1px solid var(--rule); background: var(--card);
+    overflow-y: auto; padding-top: 16px;
+  }
+  .drawer .close-drawer { display: none; }
+  /* Never dim the page behind a sidebar that is always open. */
+  .drawer-backdrop, .drawer-backdrop.open { display: none; }
+  .hamburger { display: none; }
+  nav.inline-nav { display: none; }
+  /* Reserve the gutter, then let .wrap centre itself in what's left. */
+  body { padding-left: var(--sidebar-w); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: .001ms !important; animation-duration: .001ms !important; }
 }
@@ -149,6 +176,9 @@ section.pad { padding: 0 16px; }
 .name { min-width: 0; }
 .name .n1 { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .name .n2 { font-size: 11px; color: var(--ink-3); }
+/* Task descriptions can run to several lines and hold line breaks — they're
+   the instructions for doing the job, so they wrap rather than truncate. */
+.name .n2.task-desc, .hint.task-desc { white-space: pre-line; font-size: 12px; color: var(--ink-2); margin: 2px 0; }
 .status { text-align: right; white-space: nowrap; }
 .status .st { font-size: 11px; font-weight: 600; }
 .status.ok .st { color: var(--ok); }
@@ -200,6 +230,12 @@ table.grid tbody tr:nth-child(5) td { border-top: 2px solid var(--ink-2); }
   table.grid th, table.grid td.h { font-size: 10px; padding: 6px 3px; min-width: 0; }
   td.reg-cell select { font-size: 10px; }
   .fill-btn { font-size: 10px; padding: 3px 6px; }
+  /* Cells get tight — the icons shrink with everything else rather than
+     forcing the grid to scroll sideways. */
+  .adv-cell { flex-direction: column; gap: 0; }
+  .adv-cell .hint { font-size: 9px; }
+  .icon-btn { padding: 1px; }
+  .icon-btn svg { width: 12px; height: 12px; }
 }
 
 /* ---------- Regular schedule grid (standing slots) ---------- */
@@ -222,12 +258,36 @@ td.reg-cell.avail-urgent { background: var(--urgent-bg); border-left: 3px solid 
 td.reg-cell.avail-open { border-left: 3px solid var(--avail-blue); }
 
 /* ---------- Merged Day+Week schedule grid (live status) ---------- */
+td.reg-cell { position: relative; }
 .sched-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
 .sched-name { font-size: 10px; color: var(--ink-2); line-height: 1.15; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td.reg-cell.sched-flagged { background: var(--warn-bg); }
 td.reg-cell.sched-recorded { background: #E7F0EB; }
 td.reg-cell.sched-advertised { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--warn-bg) 5px, var(--warn-bg) 10px); }
+/* Uncovered = the mockup's muted grey + hatch. An hour with no Slot behind it
+   at all (never meant to be staffed this month) is quieter still — flat, no
+   hatch — but still offers the advertise icon, since the need can change. */
+td.reg-cell.sched-uncovered { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
+td.reg-cell.sched-noslot { background: var(--open-bg); }
 .sched-name-only { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+
+/* Leave requested, not yet approved — an amber ring plus a corner dot, both
+   status colours, kept clear of the student palette. */
+td.reg-cell.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
+.leave-pin { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+
+/* Muted in-cell icon actions (advertise / retract) — deliberately quiet:
+   they sit on every empty cell in the grid, so they must not read as a call
+   to action the way a filled button would. */
+.adv-cell { display: flex; align-items: center; justify-content: center; gap: 4px; height: 100%; }
+.icon-btn {
+  background: none; border: none; padding: 3px; border-radius: 6px; cursor: pointer;
+  color: var(--ink-3); display: inline-grid; place-items: center; line-height: 0;
+}
+.icon-btn:hover { color: var(--accent); background: var(--rule-2); opacity: 1; }
+.icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+.adv-btn { opacity: .55; }
+.adv-btn:hover { opacity: 1; }
 
 /* ---------- Student "My Schedule": mine in full colour (inline style), everyone
    else flattened to grey, open cells in red — deliberately not any identity
@@ -271,6 +331,14 @@ textarea { font-family: inherit; }
 .field-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .field-row > .field { flex: 1; min-width: 150px; }
 
+/* A checkbox that sits on one line with its label — used where the choice is
+   an option on an action ("open the freed hour up"), not a form field. */
+label.inline-check {
+  display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer;
+  text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap;
+}
+label.inline-check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); }
+
 button, .btn {
   font-family: inherit; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 8px;
   border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
@@ -289,6 +357,38 @@ table.data { border-collapse: collapse; width: 100%; }
 table.data th, table.data td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule-2); font-size: 13px; }
 table.data th { color: var(--ink-3); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
 .table-scroll { overflow-x: auto; }
+
+table.data td.desc-cell {
+  max-width: 260px; white-space: pre-line;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+table.data td.row-actions { white-space: nowrap; }
+
+/* Inline-editable field inside a table row (student ID, insurance number on
+   the dashboard) — reads as a value until you touch it, not as a form. */
+td.edit-cell { white-space: nowrap; }
+td.edit-cell input {
+  width: auto; min-width: 0; padding: 5px 7px; font-size: 12.5px;
+  border-color: transparent; background: var(--rule-2);
+}
+td.edit-cell input:hover { border-color: var(--rule); }
+td.edit-cell input:focus { border-color: var(--accent); background: var(--card); }
+.save-flag { font-size: 10.5px; color: var(--ok); margin-left: 6px; }
+.save-flag.bad { color: #B3261E; }
+table.data td.row-actions > * + * { margin-left: 6px; }
+
+/* A file input dressed as a secondary button (upload controls inside table rows). */
+label.file-btn {
+  display: inline-block; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 8px;
+  background: var(--card); color: var(--accent); cursor: pointer;
+  font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; margin-bottom: 0;
+}
+label.file-btn input[type="file"] { display: none; }
+label.file-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Inline edit form, expanded under the row it edits. */
+table.data td.edit-row { background: var(--rule-2); padding: 14px 12px; }
+table.data td.edit-row .field label { color: var(--ink-2); }
 
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .badge.uncovered { background: var(--open-bg); color: #5D6B73; }

@@ -10,9 +10,10 @@ from flask import jsonify, request, current_app
 from app.dashboard import bp
 from app.models import (
     Month, Schedule, Assignment, Slot, Student, HourlyReport, AttendanceSession,
-    LeaveRequest, RegularTask, TaskCompletion, CustomTask, ReopenedSlot,
+    LeaveRequest, RegularTask, TaskCompletion, CustomTask, ReopenedSlot, ClosedDate,
 )
 from app.utils.decorators import overseer_required
+from app.utils.periods import weekdays_in_month
 from app.utils.tz import local_now, local_today
 
 
@@ -138,8 +139,9 @@ def month_dashboard(month_id):
 
 def _slot_status_rows(slots):
     """Per-slot status the overseer's schedule grid needs: who's assigned,
-    whether they've actually shown up, and whether an uncovered slot is
-    already advertised. Shared by the month grid below — used to be
+    whether they've actually shown up, whether an uncovered slot is already
+    advertised, and whether someone has asked for leave against it that
+    hasn't been decided yet. Shared by the month grid below — used to be
     day-view-only, generalised so the merged Day+Week view can show the same
     status for every slot in a month, not just one day."""
     if not slots:
@@ -177,7 +179,19 @@ def _slot_status_rows(slots):
 
     open_reopens = {
         r.slot_id: r for r in ReopenedSlot.query.filter(
-            ReopenedSlot.slot_id.in_(slot_ids), ReopenedSlot.claimed_by.is_(None)
+            ReopenedSlot.slot_id.in_(slot_ids),
+            ReopenedSlot.claimed_by.is_(None),
+            ReopenedSlot.retracted_at.is_(None),
+        ).all()
+    }
+
+    # Leave asked for but not yet decided — the overseer needs to see it on the
+    # grid, not only on the Leave page: a slot that is about to free up reads
+    # very differently from one that's settled, and it's the same glance that
+    # tells them whether it will need advertising.
+    pending_leave = {
+        lr.slot_id: lr for lr in LeaveRequest.query.filter(
+            LeaveRequest.slot_id.in_(slot_ids), LeaveRequest.status == "pending"
         ).all()
     }
 
@@ -195,12 +209,21 @@ def _slot_status_rows(slots):
                 # own forgot-to-sign-out flag, which is a different condition.
                 slot_start = datetime.combine(slot.date, datetime.min.time()).replace(hour=slot.hour)
                 status = "flagged" if now >= slot_start + grace else "scheduled"
+        reopened = open_reopens.get(slot.id)
+        lr = pending_leave.get(slot.id)
         rows.append({
             "slot": slot.to_dict(),
             "assignment": a.to_dict() if a else None,
             "student": students.get(a.student_id) if a else None,
             "status": status,
-            "advertised": slot.id in open_reopens,
+            "advertised": reopened is not None,
+            "reopened_id": reopened.id if reopened else None,
+            "pending_leave": {
+                "id": lr.id,
+                "student": students.get(lr.student_id),
+                "reason": lr.reason,
+                "lead_time_hours": lr.lead_time_hours,
+            } if lr else None,
             "note": report.note if report else None,
             "tasks_done": tasks_by_report.get(report.id) if report else None,
         })
@@ -211,13 +234,23 @@ def _slot_status_rows(slots):
 @overseer_required
 def month_grid(month_id):
     """The merged Day+Week schedule view: every slot in the month with live
-    status (scheduled/recorded/no-show/uncovered/advertised), for the
-    overseer's week-by-week grid — not just the assignment, like
-    /api/schedule/months/<id> gives."""
-    Month.query.get_or_404(month_id)
+    status (scheduled/recorded/no-show/uncovered/advertised/leave-pending),
+    for the overseer's week-by-week grid — not just the assignment, like
+    /api/schedule/months/<id> gives.
+
+    `dates` is the month's whole working calendar, not just the days that
+    happen to have slots. An hour the regular schedule marked unavailable
+    never gets a Slot generated, but it can still turn out to need cover, so
+    the grid draws every working day and every hour and lets the overseer
+    advertise any empty cell — /api/leave/advertise makes the Slot on
+    demand."""
+    month = Month.query.get_or_404(month_id)
     slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
+    closed = {c.date for c in ClosedDate.query.filter_by(month_id=month_id).all()}
+    dates = [d.isoformat() for d in weekdays_in_month(month.year_month) if d not in closed]
     return jsonify({
         "month_id": month_id,
         "students": {s.id: s.to_dict() for s in Student.query.filter_by(is_active=True).all()},
+        "dates": dates,
         "slots": _slot_status_rows(slots),
     })

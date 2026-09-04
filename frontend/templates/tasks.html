@@ -8,73 +8,180 @@
     <template v-if="isOverseer">
       <div class="panel">
         <h3>Regular tasks 例行任務</h3>
-        <table class="data">
-          <thead><tr><th>Title</th><th>Frequency</th><th>Active</th><th>Photo</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="rt in regular" v-bind:key="rt.id">
-              <td>[[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span></td>
-              <td>[[ rt.frequency ]] (every [[ rt.interval ]])</td>
-              <td>[[ rt.is_active ? 'yes' : 'no' ]]</td>
-              <td>[[ rt.photo_required ? 'required' : (rt.reference_s3_key ? 'reference set' : '—') ]]</td>
-              <td>
-                <button class="secondary" v-on:click="toggleRegularActive(rt)">[[ rt.is_active ? 'Deactivate' : 'Activate' ]]</button>
-                <label class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; cursor:pointer; font-size:12px;">
-                  Reference photo<input type="file" accept="image/*" style="display:none;" v-on:change="uploadReference($event, 'regular', rt.id)">
-                </label>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data">
+            <thead><tr><th>Title</th><th>Details</th><th>Frequency</th><th>Active</th><th>Photo</th><th></th></tr></thead>
+            <tbody>
+              <template v-for="rt in regular" v-bind:key="rt.id">
+                <tr>
+                  <td>[[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span></td>
+                  <td class="hint desc-cell">[[ rt.description || '—' ]]</td>
+                  <td>[[ rt.frequency ]] (every [[ rt.interval ]])</td>
+                  <td>[[ rt.is_active ? 'yes' : 'no' ]]</td>
+                  <td>[[ rt.photo_required ? 'required' : (rt.reference_s3_key ? 'reference set' : '—') ]]</td>
+                  <td class="row-actions">
+                    <button class="secondary" v-on:click="startEdit('regular', rt)">[[ editing.regular === rt.id ? 'Close' : 'Edit' ]]</button>
+                    <label class="file-btn">
+                      Reference photo<input type="file" accept="image/*" v-on:change="uploadReference($event, 'regular', rt.id)">
+                    </label>
+                  </td>
+                </tr>
+                <tr v-if="editing.regular === rt.id">
+                  <td colspan="6" class="edit-row">
+                    <form v-on:submit.prevent="saveRegular">
+                      <div class="field-row">
+                        <div class="field"><label>ZH title 中文</label><input v-model="draftRegular.title_zh" required></div>
+                        <div class="field"><label>EN title</label><input v-model="draftRegular.title_en"></div>
+                      </div>
+                      <div class="field">
+                        <label>Detailed description — what doing this actually involves</label>
+                        <textarea v-model="draftRegular.description" rows="4"
+                                  placeholder="Any language. Steps, where things are kept, what 'done' looks like."></textarea>
+                      </div>
+                      <div class="field-row">
+                        <div class="field"><label>Frequency</label>
+                          <select v-model="draftRegular.frequency">
+                            <option value="daily">daily</option><option value="weekly">weekly</option>
+                            <option value="monthly">monthly</option>
+                            <option value="unlimited">unlimited (a duty, not a cadence)</option>
+                          </select>
+                        </div>
+                        <div class="field" v-if="draftRegular.frequency !== 'unlimited'">
+                          <label>Every N periods</label>
+                          <input type="number" min="1" v-model.number="draftRegular.interval">
+                        </div>
+                        <div class="field"><label>Photo required?</label>
+                          <select v-model="draftRegular.photo_required">
+                            <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+                          </select>
+                        </div>
+                        <div class="field"><label>Active?</label>
+                          <select v-model="draftRegular.is_active">
+                            <option v-bind:value="true">Active</option><option v-bind:value="false">Retired</option>
+                          </select>
+                        </div>
+                      </div>
+                      <button v-bind:disabled="busy" type="submit">Save changes</button>
+                      <button class="secondary" type="button" v-on:click="editing.regular = null">Cancel</button>
+                    </form>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
         <h4 style="margin-top:14px;">Add regular task</h4>
-        <form v-on:submit.prevent="addRegular" class="field-row">
-          <div class="field"><label>ZH title</label><input v-model="newRegular.title_zh" required></div>
-          <div class="field"><label>EN title</label><input v-model="newRegular.title_en"></div>
-          <div class="field"><label>Frequency</label>
-            <select v-model="newRegular.frequency">
-              <option value="daily">daily</option><option value="weekly">weekly</option><option value="monthly">monthly</option>
-              <option value="unlimited">unlimited (a duty, not a cadence — e.g. courier)</option>
-            </select>
+        <form v-on:submit.prevent="addRegular">
+          <div class="field-row">
+            <div class="field"><label>ZH title 中文</label><input v-model="newRegular.title_zh" required></div>
+            <div class="field"><label>EN title</label><input v-model="newRegular.title_en"></div>
           </div>
-          <div class="field"><label>Photo required?</label>
-            <select v-model="newRegular.photo_required">
-              <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
-            </select>
+          <div class="field">
+            <label>Detailed description — what doing this actually involves</label>
+            <textarea v-model="newRegular.description" rows="3"
+                      placeholder="Any language. Steps, where things are kept, what 'done' looks like."></textarea>
           </div>
-          <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+          <div class="field-row">
+            <div class="field"><label>Frequency</label>
+              <select v-model="newRegular.frequency">
+                <option value="daily">daily</option><option value="weekly">weekly</option><option value="monthly">monthly</option>
+                <option value="unlimited">unlimited (a duty, not a cadence — e.g. courier)</option>
+              </select>
+            </div>
+            <div class="field" v-if="newRegular.frequency !== 'unlimited'">
+              <label>Every N periods</label>
+              <input type="number" min="1" v-model.number="newRegular.interval">
+            </div>
+            <div class="field"><label>Photo required?</label>
+              <select v-model="newRegular.photo_required">
+                <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+              </select>
+            </div>
+            <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+          </div>
         </form>
       </div>
 
       <div class="panel">
         <h3>Custom tasks 自訂任務</h3>
-        <table class="data">
-          <thead><tr><th>Title</th><th>Status</th><th>Event date</th><th>Photo</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="ct in custom" v-bind:key="ct.id">
-              <td>[[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span></td>
-              <td><span class="badge" v-bind:class="{ ok: ct.status==='done', warn: ct.status==='open' }">[[ ct.status ]]</span></td>
-              <td class="mono">[[ ct.event_date || '—' ]]</td>
-              <td>[[ ct.photo_required ? 'required' : (ct.reference_s3_key ? 'reference set' : '—') ]]</td>
-              <td>
-                <label class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; cursor:pointer; font-size:12px;">
-                  Reference photo<input type="file" accept="image/*" style="display:none;" v-on:change="uploadReference($event, 'custom', ct.id)">
-                </label>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data">
+            <thead><tr><th>Title</th><th>Details</th><th>Status</th><th>Event date</th><th>Photo</th><th></th></tr></thead>
+            <tbody>
+              <template v-for="ct in custom" v-bind:key="ct.id">
+                <tr>
+                  <td>[[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span></td>
+                  <td class="hint desc-cell">[[ ct.description || '—' ]]</td>
+                  <td><span class="badge" v-bind:class="{ ok: ct.status==='done', warn: ct.status==='open' }">[[ ct.status ]]</span></td>
+                  <td class="mono">[[ ct.event_date || '—' ]]</td>
+                  <td>[[ ct.photo_required ? 'required' : (ct.reference_s3_key ? 'reference set' : '—') ]]</td>
+                  <td class="row-actions">
+                    <button class="secondary" v-on:click="startEdit('custom', ct)">[[ editing.custom === ct.id ? 'Close' : 'Edit' ]]</button>
+                    <label class="file-btn">
+                      Reference photo<input type="file" accept="image/*" v-on:change="uploadReference($event, 'custom', ct.id)">
+                    </label>
+                  </td>
+                </tr>
+                <tr v-if="editing.custom === ct.id">
+                  <td colspan="6" class="edit-row">
+                    <form v-on:submit.prevent="saveCustom">
+                      <div class="field-row">
+                        <div class="field"><label>ZH title 中文</label><input v-model="draftCustom.title_zh" required></div>
+                        <div class="field"><label>EN title</label><input v-model="draftCustom.title_en"></div>
+                      </div>
+                      <div class="field">
+                        <label>Detailed description — what doing this actually involves</label>
+                        <textarea v-model="draftCustom.description" rows="4"
+                                  placeholder="Any language. What needs doing, for whom, and by when."></textarea>
+                      </div>
+                      <div class="field-row">
+                        <div class="field"><label>Event date (banners on sign-in from this date)</label>
+                          <input type="date" v-model="draftCustom.event_date"></div>
+                        <div class="field"><label>Photo required?</label>
+                          <select v-model="draftCustom.photo_required">
+                            <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+                          </select>
+                        </div>
+                        <div class="field"><label>Status</label>
+                          <select v-model="draftCustom.status">
+                            <option value="open">open</option><option value="done">done</option>
+                          </select>
+                        </div>
+                      </div>
+                      <button v-bind:disabled="busy" type="submit">Save changes</button>
+                      <button class="secondary" type="button" v-on:click="editing.custom = null">Cancel</button>
+                    </form>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
         <h4 style="margin-top:14px;">Add custom task</h4>
-        <form v-on:submit.prevent="addCustom" class="field-row">
-          <div class="field"><label>ZH title</label><input v-model="newCustom.title_zh" required></div>
-          <div class="field"><label>EN title</label><input v-model="newCustom.title_en"></div>
-          <div class="field"><label>Event date (optional — banners on sign-in from this date)</label><input type="date" v-model="newCustom.event_date"></div>
-          <div class="field"><label>Photo required?</label>
-            <select v-model="newCustom.photo_required">
-              <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
-            </select>
+        <form v-on:submit.prevent="addCustom">
+          <div class="field-row">
+            <div class="field"><label>ZH title 中文</label><input v-model="newCustom.title_zh" required></div>
+            <div class="field"><label>EN title</label><input v-model="newCustom.title_en"></div>
           </div>
-          <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+          <div class="field">
+            <label>Detailed description — what doing this actually involves</label>
+            <textarea v-model="newCustom.description" rows="3"
+                      placeholder="Any language. What needs doing, for whom, and by when."></textarea>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Event date (optional — banners on sign-in from this date)</label><input type="date" v-model="newCustom.event_date"></div>
+            <div class="field"><label>Photo required?</label>
+              <select v-model="newCustom.photo_required">
+                <option v-bind:value="false">No</option><option v-bind:value="true">Yes</option>
+              </select>
+            </div>
+            <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Save</button></div>
+          </div>
         </form>
       </div>
+      <p class="error-text pad" v-if="message">[[ message ]]</p>
     </template>
 
     <template v-if="isStudent">
@@ -88,7 +195,7 @@
           <div class="name">
             <div class="n1">[[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
               <span class="badge warn" v-if="rt.photo_required">photo required</span></div>
-            <div class="n2">[[ rt.description ]]</div>
+            <div class="n2 task-desc">[[ rt.description ]]</div>
             <div class="hint">[[ rt.frequency === 'unlimited' ? 'as needed, any time' : rt.frequency + ' (every ' + rt.interval + ')' ]]</div>
           </div>
           <button class="secondary" v-if="rt.reference_s3_key" type="button" v-on:click="viewReference('regular', rt.id)">Reference photo</button>
@@ -103,7 +210,7 @@
           <div class="name">
             <div class="n1">[[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
               <span class="badge warn" v-if="ct.photo_required">photo required</span></div>
-            <div class="n2">[[ ct.description ]]</div>
+            <div class="n2 task-desc">[[ ct.description ]]</div>
             <div class="hint" v-if="ct.event_date">due [[ ct.event_date ]]</div>
           </div>
           <button class="secondary" v-if="ct.reference_s3_key" type="button" v-on:click="viewReference('custom', ct.id)">Reference photo</button>
@@ -116,6 +223,8 @@
 {% block page_script %}
 <script>
 const { createApp } = Vue;
+const BLANK_REGULAR = { title_zh: "", title_en: "", description: "", frequency: "weekly", interval: 1, photo_required: false };
+const BLANK_CUSTOM = { title_zh: "", title_en: "", description: "", event_date: "", photo_required: false };
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
@@ -123,9 +232,13 @@ const app = createApp({
       isOverseer: CURRENT_USER && CURRENT_USER.role === "overseer",
       isStudent: CURRENT_USER && CURRENT_USER.role === "student",
       regular: [], custom: [],
-      newRegular: { title_zh: "", title_en: "", description: "", frequency: "weekly", interval: 1, photo_required: false },
-      newCustom: { title_zh: "", title_en: "", description: "", event_date: "", photo_required: false },
-      busy: false,
+      newRegular: Object.assign({}, BLANK_REGULAR),
+      newCustom: Object.assign({}, BLANK_CUSTOM),
+      // Which row is open for editing, and the working copy being edited —
+      // edits only reach the server on Save, so Cancel really cancels.
+      editing: { regular: null, custom: null },
+      draftRegular: {}, draftCustom: {},
+      busy: false, message: "",
     };
   },
   async mounted() { await this.load(); },
@@ -134,25 +247,64 @@ const app = createApp({
       this.regular = await OIA.api.get(this.isOverseer ? "/api/tasks/regular" : "/api/tasks/regular/active");
       this.custom = await OIA.api.get(this.isOverseer ? "/api/tasks/custom" : "/api/tasks/custom?status=open");
     },
+    startEdit(kind, task) {
+      if (this.editing[kind] === task.id) { this.editing[kind] = null; return; }
+      this.editing[kind] = task.id;
+      this.message = "";
+      if (kind === "regular") {
+        this.draftRegular = {
+          id: task.id, title_zh: task.title_zh, title_en: task.title_en || "",
+          description: task.description || "", frequency: task.frequency,
+          interval: task.interval, photo_required: task.photo_required, is_active: task.is_active,
+        };
+      } else {
+        this.draftCustom = {
+          id: task.id, title_zh: task.title_zh, title_en: task.title_en || "",
+          description: task.description || "", event_date: task.event_date || "",
+          photo_required: task.photo_required, status: task.status,
+        };
+      }
+    },
+    async saveRegular() {
+      this.busy = true; this.message = "";
+      try {
+        const d = this.draftRegular;
+        await OIA.api.patch("/api/tasks/regular/" + d.id, {
+          title_zh: d.title_zh, title_en: d.title_en || null, description: d.description || null,
+          frequency: d.frequency, interval: Number(d.interval) || 1,
+          photo_required: d.photo_required, is_active: d.is_active,
+        });
+        this.editing.regular = null;
+        await this.load();
+      } catch (e) { this.message = e.message; } finally { this.busy = false; }
+    },
+    async saveCustom() {
+      this.busy = true; this.message = "";
+      try {
+        const d = this.draftCustom;
+        await OIA.api.patch("/api/tasks/custom/" + d.id, {
+          title_zh: d.title_zh, title_en: d.title_en || null, description: d.description || null,
+          event_date: d.event_date || null, photo_required: d.photo_required, status: d.status,
+        });
+        this.editing.custom = null;
+        await this.load();
+      } catch (e) { this.message = e.message; } finally { this.busy = false; }
+    },
     async addRegular() {
-      this.busy = true;
+      this.busy = true; this.message = "";
       try {
         await OIA.api.post("/api/tasks/regular", this.newRegular);
-        this.newRegular = { title_zh: "", title_en: "", description: "", frequency: "weekly", interval: 1, photo_required: false };
+        this.newRegular = Object.assign({}, BLANK_REGULAR);
         await this.load();
-      } finally { this.busy = false; }
-    },
-    async toggleRegularActive(rt) {
-      await OIA.api.patch("/api/tasks/regular/" + rt.id, { is_active: !rt.is_active });
-      await this.load();
+      } catch (e) { this.message = e.message; } finally { this.busy = false; }
     },
     async addCustom() {
-      this.busy = true;
+      this.busy = true; this.message = "";
       try {
         await OIA.api.post("/api/tasks/custom", Object.assign({}, this.newCustom, { event_date: this.newCustom.event_date || null }));
-        this.newCustom = { title_zh: "", title_en: "", description: "", event_date: "", photo_required: false };
+        this.newCustom = Object.assign({}, BLANK_CUSTOM);
         await this.load();
-      } finally { this.busy = false; }
+      } catch (e) { this.message = e.message; } finally { this.busy = false; }
     },
     async viewReference(kind, taskId) {
       const path = kind === "regular"
@@ -172,6 +324,7 @@ const app = createApp({
       form.append("file", file);
       const path = kind === "regular" ? "/api/tasks/regular/" + id + "/reference-photo" : "/api/tasks/custom/" + id + "/reference-photo";
       await OIA.api.post(path, form);
+      evt.target.value = "";
       await this.load();
     },
   },

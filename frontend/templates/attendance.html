@@ -61,6 +61,7 @@
                 [[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
                 <span class="badge warn" v-if="rt.photo_required">photo required</span>
               </label>
+              <div class="hint task-desc" style="margin-left:24px;" v-if="rt.description">[[ rt.description ]]</div>
               <div v-if="reportRows[s.id].regular[rt.id] && rt.reference_s3_key" style="margin:4px 0 4px 24px;">
                 <button class="secondary" type="button" v-on:click="viewReference('regular', rt.id)">View reference photo</button>
               </div>
@@ -78,6 +79,7 @@
                 [[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
                 <span class="badge warn" v-if="ct.photo_required">photo required</span>
               </label>
+              <div class="hint task-desc" style="margin-left:24px;" v-if="ct.description">[[ ct.description ]]</div>
               <div v-if="reportRows[s.id].custom[ct.id] && ct.reference_s3_key" style="margin:4px 0 4px 24px;">
                 <button class="secondary" type="button" v-on:click="viewReference('custom', ct.id)">View reference photo</button>
               </div>

@@ -30,22 +30,43 @@
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ hourLabel(h) ]]</td>
               <td v-for="d in week" v-bind:key="d + '_' + h"
-                  class="reg-cell" v-bind:class="cellClass(d, h)" v-bind:style="cellStyle(d, h)">
+                  class="reg-cell" v-bind:class="cellClass(d, h)" v-bind:style="cellStyle(d, h)"
+                  v-bind:title="cellTitle(d, h)">
                 <span class="sched-cell" v-if="row(d, h) && row(d, h).student">
                   <oia-token v-bind:student="row(d, h).student" size="sm"></oia-token>
                   <span class="sched-name">[[ studentLabel(row(d, h).student) ]]</span>
                 </span>
-                <span class="hint" v-else-if="row(d, h) && row(d, h).advertised">[[ narrow ? 'adv' : 'advertised' ]]</span>
-                <button class="fill-btn" v-else-if="row(d, h)"
-                        v-bind:disabled="advertising === row(d, h).slot.id"
-                        v-on:click="advertise(row(d, h))">[[ narrow ? 'Ad' : 'Advertise' ]]</button>
+                <span class="adv-cell" v-else-if="row(d, h) && row(d, h).advertised">
+                  <span class="hint">[[ narrow ? 'adv' : 'advertised' ]]</span>
+                  <button class="icon-btn" type="button"
+                          v-bind:disabled="busySlot === cellKey(d, h)"
+                          v-on:click="retract(row(d, h))"
+                          aria-label="Retract this open shift">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                         stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  </button>
+                </span>
+                <button class="icon-btn adv-btn" type="button" v-else-if="canAdvertise(d)"
+                        v-bind:disabled="busySlot === cellKey(d, h)"
+                        v-on:click="advertise(d, h)"
+                        aria-label="Advertise this hour on Open Shifts">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z"/>
+                    <path d="M16 9.5a3.2 3.2 0 0 1 0 5"/>
+                    <path d="M18.8 7a7 7 0 0 1 0 10"/>
+                  </svg>
+                </button>
+                <span class="leave-pin" v-if="row(d, h) && row(d, h).pending_leave"></span>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
     </template>
-    <div class="weeknote">↔ scroll if needed · colour + shape = one student at a glance · past weeks are hidden</div>
+    <div class="weeknote">colour + shape = one student at a glance · amber ring = leave requested, not yet approved ·
+      📢 advertises an empty hour on Open Shifts, ✕ pulls it back · past weeks are hidden</div>
+    <p class="error-text pad" v-if="message">[[ message ]]</p>
 
     <div class="roster">
       <h3>Roster · 名冊</h3>
@@ -69,7 +90,7 @@ const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { months: [], monthId: null, payload: null, advertising: null, narrow: false, HOURS };
+    return { months: [], monthId: null, payload: null, busySlot: null, message: "", narrow: false, HOURS };
   },
   computed: {
     rowsByKey() {
@@ -78,10 +99,12 @@ const app = createApp({
       return map;
     },
     weeks() {
+      // Built from the month's working calendar, not from the slots that
+      // happen to exist: an hour the regular schedule marked unavailable has
+      // no Slot behind it, but it still needs a cell so it can be advertised
+      // if the need comes up.
       if (!this.payload) return [];
-      const seen = new Set(), dates = [];
-      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
-      return OIA.groupIntoWeeks(dates);
+      return OIA.groupIntoWeeks(this.payload.dates || []);
     },
     todayStr() {
       const d = new Date();
@@ -96,7 +119,7 @@ const app = createApp({
   watch: {
     async monthId() {
       if (!this.monthId) return;
-      this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
+      await this.reload();
     },
   },
   async mounted() {
@@ -108,7 +131,11 @@ const app = createApp({
     }
   },
   methods: {
+    async reload() {
+      this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
+    },
     row(date, hour) { return this.rowsByKey[date + "_" + hour]; },
+    cellKey(date, hour) { return date + "_" + hour; },
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
     weekNumber(week) { return this.weeks.indexOf(week) + 1; },
@@ -116,26 +143,71 @@ const app = createApp({
       const name = s.english_name || s.chinese_name;
       return this.narrow ? OIA.shortName(name) : name;
     },
+    // Advertising a past hour helps nobody — the offer could never be taken up.
+    canAdvertise(d) { return d >= this.todayStr; },
     cellClass(d, h) {
       const r = this.row(d, h);
-      if (!r) return {};
-      if (r.student) return { "sched-flagged": r.status === "flagged", "sched-recorded": r.status === "recorded" };
-      return r.advertised ? { "sched-advertised": true } : { "reg-unavailable": true };
+      if (!r) return { "sched-noslot": true };
+      const pending = !!r.pending_leave;
+      if (r.student) {
+        return {
+          "sched-flagged": r.status === "flagged",
+          "sched-recorded": r.status === "recorded",
+          "sched-leave-pending": pending,
+        };
+      }
+      return { "sched-advertised": r.advertised, "sched-uncovered": !r.advertised, "sched-leave-pending": pending };
     },
     cellStyle(d, h) {
       const r = this.row(d, h);
       if (r && r.student && r.status === "scheduled") return { background: r.student.colour + "22" };
       return {};
     },
-    async advertise(row) {
-      this.advertising = row.slot.id;
+    cellTitle(d, h) {
+      const r = this.row(d, h);
+      if (r && r.pending_leave) {
+        const who = r.pending_leave.student
+          ? (r.pending_leave.student.english_name || r.pending_leave.student.chinese_name)
+          : "Someone";
+        return who + " requested leave for this hour — pending approval: " + r.pending_leave.reason;
+      }
+      if (r && r.advertised) return "Open on Open Shifts — click ✕ to retract";
+      if (!r) return "No slot generated for this hour — advertising it creates one";
+      if (!r.student) return "Uncovered";
+      return null;
+    },
+    async advertise(d, h) {
+      const key = this.cellKey(d, h);
+      this.busySlot = key;
+      this.message = "";
       try {
-        await OIA.api.post("/api/leave/advertise", { slot_id: row.slot.id });
-        this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
+        const r = this.row(d, h);
+        // A cell with no Slot behind it is addressed by (month, date, hour) —
+        // the backend creates the Slot on demand.
+        await OIA.api.post("/api/leave/advertise", r
+          ? { slot_id: r.slot.id }
+          : { month_id: this.monthId, date: d, hour: h });
+        await this.reload();
       } catch (e) {
-        alert(e.message);
+        this.message = e.message === "no_committed_schedule"
+          ? "This month has no committed schedule yet — commit it before advertising hours."
+          : e.message;
       } finally {
-        this.advertising = null;
+        this.busySlot = null;
+      }
+    },
+    async retract(r) {
+      this.busySlot = this.cellKey(r.slot.date, r.slot.hour);
+      this.message = "";
+      try {
+        await OIA.api.del("/api/leave/reopened/" + r.reopened_id);
+        await this.reload();
+      } catch (e) {
+        this.message = e.message === "already_claimed"
+          ? "Someone already claimed this shift — edit the assignment instead."
+          : e.message;
+      } finally {
+        this.busySlot = null;
       }
     },
   },
