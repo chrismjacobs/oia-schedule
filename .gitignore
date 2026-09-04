@@ -5,3 +5,10 @@ backend/**/__pycache__/
 backend/*.db
 *.pyc
 .DS_Store
+
+# Local scratch and editor state, not project files. notes.txt in particular
+# holds account passwords for the deployment — keep it out of the repo.
+notes.txt
+situation.txt
+style.txt
+*.code-workspace
