@@ -3,7 +3,7 @@ from flask_login import login_user, logout_user, current_user
 
 from app.auth import bp
 from app.extensions import db
-from app.models import User, Student, Semester, STUDENT_ID_RE
+from app.models import User, Student, Semester, STUDENT_ID_RE, STUDENT_ID_MAX
 from app.utils.identity import assign_token
 from app.utils.decorators import login_required_api
 from app.utils.tz import local_now
@@ -32,11 +32,15 @@ def register():
 
     if not chinese_name and not english_name:
         return jsonify({"error": "name_required", "message": "Provide at least one of Chinese/English name"}), 400
-    if not STUDENT_ID_RE.match(student_id):
-        return jsonify({"error": "invalid_student_id", "message": "Student ID must be exactly 8 digits"}), 400
+    if not STUDENT_ID_RE.match(student_id) or len(student_id) > STUDENT_ID_MAX:
+        return jsonify({"error": "invalid_student_id",
+                        "message": f"Student ID must be letters and numbers only, "
+                                   f"up to {STUDENT_ID_MAX} characters"}), 400
     if len(password) < 8:
         return jsonify({"error": "weak_password", "message": "Password must be at least 8 characters"}), 400
-    if Student.query.filter_by(student_id=student_id).first():
+    # Case-insensitive, like the email check above: now that IDs can contain
+    # letters, "A12" and "a12" are the same person to everyone but the DB.
+    if Student.query.filter(db.func.lower(Student.student_id) == student_id.lower()).first():
         return jsonify({"error": "student_id_taken"}), 409
 
     semester = Semester.query.filter_by(is_active=True).first()

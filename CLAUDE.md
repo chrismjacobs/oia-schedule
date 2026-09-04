@@ -41,8 +41,11 @@ current system cannot see, and it must be visible on the dashboard from v1.
 
 The roster **changes every semester** — model students as belonging to a semester
 rather than a fixed list. Access is **invite-only** (no open registration).
-Registration captures: Chinese name, English name, and **student ID (8 digits,
-numeric only, no letter prefix)**.
+Registration captures: Chinese name, English name, and **student ID (letters and
+numbers, any length up to 32)**. *This was originally specified as 8 numeric
+digits with no letter prefix; the real roster turned out to carry IDs that don't
+fit that shape, so the rule was relaxed. Don't reintroduce the digits-only
+assumption.* The overseer can also correct an ID afterwards from the dashboard.
 
 ---
 
@@ -341,7 +344,7 @@ magenta `#C2185B`, brown `#8D6E63`.
 
 0. **Scaffold on the pinned stack (§3–§4)** — Flask app factory, `base.html` with the
    mobile nav, `static/css/app.css` ported from `roster-mockup.html`. No Node.
-1. Auth + invite; student registration (zh/en name, 8-digit ID); semester/roster.
+1. Auth + invite; student registration (zh/en name, alphanumeric ID); semester/roster.
 2. Slot generation from calendar + holidays/closed dates.
 3. Availability selection + open/close window.
 4. OR-Tools allocator (hard constraints + gentle soft prefs) → draft.

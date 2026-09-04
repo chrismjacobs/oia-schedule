@@ -22,8 +22,9 @@
         </div>
       </div>
       <div class="field">
-        <label>Student ID 學號（8碼數字）</label>
-        <input class="student-id" v-model="studentId" pattern="[0-9]{8}" maxlength="8" required>
+        <label>Student ID 學號</label>
+        <input class="student-id" v-model="studentId" pattern="[A-Za-z0-9]+" maxlength="32" required
+               title="Letters and numbers only">
       </div>
       <div class="field">
         <label>Password</label>

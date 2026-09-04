@@ -20,10 +20,14 @@ STUDENT_PALETTE = [
 ]
 STUDENT_SHAPES = ["circle", "triangle", "square", "diamond"]
 
-# 8 digits, numeric only, no letter prefix (CLAUDE.md #2). Lives here rather
-# than in one blueprint because two places enforce it: registration
-# (auth/routes.py) and the overseer's inline edit (admin/routes.py).
-STUDENT_ID_RE = re.compile(r"^[0-9]{8}$")
+# Letters and digits, any length. The original brief specified 8 numeric
+# digits, but the real roster turned out to carry IDs that don't fit that
+# shape, so the rule is now just "alphanumeric, non-empty" — no length or
+# prefix assumption. Lives here rather than in one blueprint because two
+# places enforce it: registration (auth/routes.py) and the overseer's inline
+# edit (admin/routes.py).
+STUDENT_ID_RE = re.compile(r"^[A-Za-z0-9]+$")
+STUDENT_ID_MAX = 32
 
 SLOT_HOURS = [8, 9, 10, 11, 13, 14, 15, 16]  # 1-hour slots, Mon-Fri (CLAUDE.md #4)
 
@@ -58,7 +62,7 @@ class Student(db.Model):
     semester_id = db.Column(db.Integer, db.ForeignKey("semester.id"), nullable=False)
     chinese_name = db.Column(db.String(64), nullable=False)
     english_name = db.Column(db.String(64), nullable=False)
-    student_id = db.Column(db.String(8), nullable=False, unique=True)
+    student_id = db.Column(db.String(STUDENT_ID_MAX), nullable=False, unique=True)
     colour = db.Column(db.String(7), nullable=False)
     shape = db.Column(db.String(16), nullable=False)
     # Insurance (勞保) number. Admin-managed only: not captured at registration
@@ -75,9 +79,11 @@ class Student(db.Model):
     user = db.relationship("User", back_populates="student", uselist=False)
 
     __table_args__ = (
-        # 8-digit numeric student_id is validated in app code (STUDENT_ID_RE above),
-        # not a DB check constraint — SQLite (the v1 target) has no portable regex
-        # constraint syntax. Uniqueness *is* enforced by the column, below.
+        # student_id's shape is validated in app code (STUDENT_ID_RE above), not a
+        # DB check constraint — SQLite (the v1 target) has no portable regex
+        # constraint syntax. Uniqueness *is* enforced by the column, though only
+        # exactly; the case-insensitive check lives in app code too, so "A12" and
+        # "a12" can't both be created.
         db.UniqueConstraint("semester_id", "colour", "shape", name="uq_student_token_per_semester"),
     )
 

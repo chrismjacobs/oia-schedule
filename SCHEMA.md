@@ -48,7 +48,7 @@ Roster period — the student list changes each semester.
 | semester_id | fk → semester | roster membership |
 | chinese_name | text | required |
 | english_name | text | required |
-| student_id | char(8) | **8 digits, numeric only, no letter prefix**; validate |
+| student_id | varchar(32) | **letters and numbers, any length**; unique (case-insensitively); validate in app code |
 | colour | text | hex from the managed 8-colour palette (CLAUDE §15) |
 | shape | enum | circle / triangle / square / diamond |
 | line_user_id | text null | optional; only if individual DMs are enabled later |

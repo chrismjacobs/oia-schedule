@@ -8,7 +8,7 @@ from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
     RegularSlotTemplate, RegularSlot,
-    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES, STUDENT_ID_RE,
+    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES, STUDENT_ID_RE, STUDENT_ID_MAX,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
@@ -118,10 +118,13 @@ def update_student(student_id):
     new_student_id = None
     if "student_id" in data:
         raw = (data["student_id"] or "").strip()
-        if not STUDENT_ID_RE.match(raw):
+        if not STUDENT_ID_RE.match(raw) or len(raw) > STUDENT_ID_MAX:
             return jsonify({"error": "invalid_student_id",
-                            "message": "Student ID must be exactly 8 digits"}), 400
-        clash = Student.query.filter(Student.student_id == raw, Student.id != student.id).first()
+                            "message": f"Student ID must be letters and numbers only, "
+                                       f"up to {STUDENT_ID_MAX} characters"}), 400
+        clash = Student.query.filter(
+            db.func.lower(Student.student_id) == raw.lower(), Student.id != student.id
+        ).first()
         if clash:
             return jsonify({"error": "student_id_taken",
                             "message": "Another student already has that ID"}), 409
