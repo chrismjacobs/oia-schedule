@@ -20,6 +20,8 @@
   --ok: #4B7A63;          /* recorded ok, muted */
   --urgent: #C0392B;      /* regular slot confirmed declined — redder than --warn, deliberately close to "open" */
   --urgent-bg: #FBEAE7;
+  --mine: #1F7A54;        /* the viewing student's own shift on My Schedule — one standard green for everyone */
+  --mine-ink: #FFFFFF;
   --avail-blue: #2563EB;  /* plain open/shared hours on the availability grid */
   --avail-blue-bg: #EAF1FB;
   --sidebar-w: 232px;     /* pinned-open nav from 1024px up */
@@ -289,9 +291,12 @@ td.reg-cell.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
 .adv-btn { opacity: .55; }
 .adv-btn:hover { opacity: 1; }
 
-/* ---------- Student "My Schedule": mine in full colour (inline style), everyone
-   else flattened to grey, open cells in red — deliberately not any identity
-   colour so it never collides with whichever colour is "mine" that view. ---------- */
+/* ---------- Student "My Schedule": mine in one standard green — the same for
+   every student, since on this page the reader already knows who they are, so a
+   fixed high-contrast green reads identically for everyone. Everyone else is
+   flattened to grey, open cells stay red. ---------- */
+td.reg-cell.sched-mine { background: var(--mine); }
+td.reg-cell.sched-mine .sched-name-only { color: var(--mine-ink); font-weight: 700; }
 td.reg-cell.sched-other { background: var(--open-bg); }
 td.reg-cell.sched-other .sched-name-only { color: var(--ink-3); }
 td.reg-cell.sched-open { background: #DC2626; }

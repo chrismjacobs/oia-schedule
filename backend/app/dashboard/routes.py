@@ -3,13 +3,13 @@ Surfaces: scheduled-vs-recorded gaps, no-shows, leave patterns, uncovered
 slots, task completion. All values here are derived, never stored
 (SCHEMA.md 'Derived values')."""
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from flask import jsonify, request, current_app
 
 from app.dashboard import bp
 from app.models import (
-    Month, Schedule, Assignment, Slot, Student, HourlyReport, AttendanceSession,
+    Month, Schedule, Assignment, Slot, Student, SessionHour, AttendanceSession,
     LeaveRequest, RegularTask, TaskCompletion, CustomTask, ReopenedSlot, ClosedDate,
 )
 from app.utils.decorators import overseer_required
@@ -40,18 +40,18 @@ def build_month_dashboard(month):
     for a in assignments:
         scheduled_hours[a.student_id] += 1
 
-    reports = (
-        HourlyReport.query.join(AttendanceSession, HourlyReport.session_id == AttendanceSession.id)
-        .join(Slot, HourlyReport.slot_id == Slot.id)
+    recorded = (
+        SessionHour.query.join(AttendanceSession, SessionHour.session_id == AttendanceSession.id)
+        .join(Slot, SessionHour.slot_id == Slot.id)
         .filter(Slot.month_id == month.id)
         .all()
     )
     recorded_hours = defaultdict(int)
     reported_pairs = set()  # (student_id, slot_id)
-    for r in reports:
-        student_id = r.session.student_id
+    for sh in recorded:
+        student_id = sh.session.student_id
         recorded_hours[student_id] += 1
-        reported_pairs.add((student_id, r.slot_id))
+        reported_pairs.add((student_id, sh.slot_id))
 
     all_student_ids = set(students.keys()) | set(scheduled_hours.keys()) | set(recorded_hours.keys())
     gap_rows = []
@@ -102,9 +102,12 @@ def build_month_dashboard(month):
 
     coverage_pct = round(100.0 * len(assignments) / len(slots), 1) if slots else 0.0
 
+    year, month_no = (int(x) for x in month.year_month.split("-"))
+    month_start = date(year, month_no, 1)
+    month_end = date(year + (month_no == 12), (month_no % 12) + 1, 1)
     regular_completions = (
-        TaskCompletion.query.join(Slot, TaskCompletion.slot_id == Slot.id)
-        .filter(Slot.month_id == month.id).all()
+        TaskCompletion.query.join(AttendanceSession, TaskCompletion.session_id == AttendanceSession.id)
+        .filter(AttendanceSession.date >= month_start, AttendanceSession.date < month_end).all()
     )
     completions_by_task = defaultdict(int)
     for tc in regular_completions:
@@ -158,20 +161,21 @@ def _slot_status_rows(slots):
         ).all():
             assignment_by_slot[a.slot_id] = a
 
-    reports = (
-        HourlyReport.query.join(AttendanceSession, HourlyReport.session_id == AttendanceSession.id)
-        .filter(HourlyReport.slot_id.in_(slot_ids)).all()
-    )
-    report_by_slot = {r.slot_id: r for r in reports}
-    report_ids = [r.id for r in reports]
+    # One report per session (CLAUDE.md #9), so every hour of a run carries
+    # that session's write-up and its ticked tasks — the work crosses the
+    # hour boundaries, and splitting it per cell would invent detail nobody
+    # entered.
+    recorded = SessionHour.query.filter(SessionHour.slot_id.in_(slot_ids)).all()
+    session_by_slot = {sh.slot_id: sh.session for sh in recorded}
+    session_ids = {sh.session_id for sh in recorded}
 
-    tasks_by_report = {}
-    if report_ids:
-        for tc in TaskCompletion.query.filter(TaskCompletion.hourly_report_id.in_(report_ids)).all():
-            tasks_by_report.setdefault(tc.hourly_report_id, {"regular": [], "custom": []})["regular"].append(
+    tasks_by_session = {}
+    if session_ids:
+        for tc in TaskCompletion.query.filter(TaskCompletion.session_id.in_(session_ids)).all():
+            tasks_by_session.setdefault(tc.session_id, {"regular": [], "custom": []})["regular"].append(
                 tc.regular_task.to_dict())
-        for ct in CustomTask.query.filter(CustomTask.hourly_report_id.in_(report_ids)).all():
-            tasks_by_report.setdefault(ct.hourly_report_id, {"regular": [], "custom": []})["custom"].append(
+        for ct in CustomTask.query.filter(CustomTask.session_id.in_(session_ids)).all():
+            tasks_by_session.setdefault(ct.session_id, {"regular": [], "custom": []})["custom"].append(
                 ct.to_dict())
 
     grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
@@ -198,10 +202,10 @@ def _slot_status_rows(slots):
     rows = []
     for slot in slots:
         a = assignment_by_slot.get(slot.id)
-        report = report_by_slot.get(slot.id)
+        session = session_by_slot.get(slot.id)
         status = "uncovered"
         if a:
-            if report:
+            if session:
                 status = "recorded"
             else:
                 # No-show = assignment for a past slot with no covering session
@@ -224,8 +228,8 @@ def _slot_status_rows(slots):
                 "reason": lr.reason,
                 "lead_time_hours": lr.lead_time_hours,
             } if lr else None,
-            "note": report.note if report else None,
-            "tasks_done": tasks_by_report.get(report.id) if report else None,
+            "note": session.note if session else None,
+            "tasks_done": tasks_by_session.get(session.id) if session else None,
         })
     return rows
 

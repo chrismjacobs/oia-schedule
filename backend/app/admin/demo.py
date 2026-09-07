@@ -20,7 +20,7 @@ from app.extensions import db
 from app.utils.tz import local_now, local_today
 from app.models import (
     Semester, Student, Month, Slot, Availability, Schedule, Assignment,
-    AttendanceSession, HourlyReport, SLOT_HOURS,
+    AttendanceSession, SessionHour, SLOT_HOURS,
 )
 from app.schedule.solver import solve_month
 from app.utils.settings import get_solver_weights, get_floor_hours
@@ -81,7 +81,7 @@ def reset_demo():
     if demo_student_ids:
         sessions = AttendanceSession.query.filter(AttendanceSession.student_id.in_(demo_student_ids)).all()
         for sess in sessions:
-            HourlyReport.query.filter_by(session_id=sess.id).delete(synchronize_session=False)
+            SessionHour.query.filter_by(session_id=sess.id).delete(synchronize_session=False)
         AttendanceSession.query.filter(AttendanceSession.student_id.in_(demo_student_ids)).delete(synchronize_session=False)
         Availability.query.filter(Availability.student_id.in_(demo_student_ids)).delete(synchronize_session=False)
         Assignment.query.filter(Assignment.student_id.in_(demo_student_ids)).delete(synchronize_session=False)
@@ -208,7 +208,8 @@ def _record_session(student, date, signed_in_at, signed_out_at, slots):
     session = AttendanceSession(
         student_id=student.id, date=date, signed_in_at=signed_in_at, signed_out_at=signed_out_at, flagged=False,
     )
+    session.note = "Demo data — front desk coverage, walk-in enquiries, filing."
     db.session.add(session)
     db.session.flush()
     for slot in slots:
-        db.session.add(HourlyReport(session_id=session.id, slot_id=slot.id, note="Demo data — front desk coverage."))
+        db.session.add(SessionHour(session_id=session.id, slot_id=slot.id))

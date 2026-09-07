@@ -37,7 +37,7 @@ current system cannot see, and it must be visible on the dashboard from v1.
   opens/closes selection, reviews and commits the schedule, approves leave,
   monitors attendance, manages tasks. Primary user; the UX is tuned for them.
 - **Student worker** — selects availability, views shifts, signs in/out, files
-  per-hour reports, requests leave, claims freed slots and custom tasks.
+  a report per session, requests leave, claims freed slots and custom tasks.
 
 The roster **changes every semester** — model students as belonging to a semester
 rather than a fixed list. Access is **invite-only** (no open registration).
@@ -191,8 +191,15 @@ is an acceptable fallback if OR-Tools is heavy on the free instance; CP-SAT pref
 - **Sign-in opens 10 minutes before** a slot.
 - A student on a **consecutive run signs in once** (start) and out (end) — one
   session spanning the run. No per-hour sign-in.
-- **At sign-out, a per-hour report:** for each hour, a free-text note and/or ticked
-  regular tasks and/or claimed custom tasks.
+- **At sign-out, one report for the whole session:** a single free-text note plus
+  ticked regular tasks and/or claimed custom tasks, covering the entire run.
+  *This was originally specified as a report per hour; a shift is usually a
+  4-hour run and the work carries from one hour into the next — a task started
+  at 09:40 and finished at 10:10 belongs to neither hour on its own — so
+  hour-by-hour boxes were both tedious to fill and misleading to read. Don't
+  reintroduce per-hour reporting.* The hours the session **records** are still
+  per-hour rows (`session_hour`), derived from the run signed in against — that
+  is what scheduled-vs-recorded counts.
 - **Forgot-to-sign-out → flag for the overseer**, don't auto-close at a guess.
 - **Scheduled vs recorded** = assignments vs sessions. Core deliverable (§1).
 - Honour-system for v1 (no wifi/IP check). Auto-flag *scheduled but never signed in*
@@ -350,7 +357,7 @@ magenta `#C2185B`, brown `#8D6E63`.
 4. OR-Tools allocator (hard constraints + gentle soft prefs) → draft.
 5. Draft review grid with availability-aware dropdown edits → commit.
 6. Colour × shape identity system + day/week views (match the mockup).
-7. Sign-in/out with run sessions + per-hour reports.
+7. Sign-in/out with run sessions + one report per session.
 8. **Scheduled-vs-recorded on the dashboard. (Core — do not defer.)**
 9. Leave requests + FCFS reopens + pattern tracking.
 10. Regular/custom tasks with cadence guarding.

@@ -11,7 +11,7 @@ unless noted; `student_id` (the university number) is a separate business key.
 ```
 semester ──< student ──< availability >── slot >── assignment
                  │                          │
-                 ├──< attendance_session ──< hourly_report
+                 ├──< attendance_session ──< session_hour
                  ├──< leave_request ── (reopens) ── slot
                  ├──< task_completion >── regular_task
                  ├──< custom_task (claimed_by)
@@ -247,17 +247,23 @@ One sign-in→sign-out episode across a contiguous run of the student's slots.
 | signed_in_at | ts | sign-in opens 10 min before first slot |
 | signed_out_at | ts null | null + past end ⇒ **forgot-to-sign-out flag** |
 | flagged | bool | forgot-to-sign-out, or signed-in-but-not-scheduled |
+| note | text null | **the report** — one free-text write-up for the whole session, any language, captured at sign-out |
 
-### `hourly_report`
-Per-hour detail captured at sign-out (hourly even though sign-in is per-run).
+Task ticks hang off the session too, via `task_completion.session_id` and
+`custom_task.session_id`. One report per session, not per hour (CLAUDE.md §9).
+
+### `session_hour`
+Which scheduled hours a session actually recorded — the recorded side of
+scheduled-vs-recorded. Pure coverage: no note, no ticks.
 
 | field | type | notes |
 |---|---|---|
 | id | pk | |
 | session_id | fk → attendance_session | |
-| slot_id | fk → slot | the hour this line covers |
-| note | text null | free-text, any language |
-| (task ticks recorded via task_completion / custom_task links) | | |
+| slot_id | fk → slot | the hour this row records |
+
+`(session_id, slot_id)` unique; an hour already recorded by an earlier session
+that day is never recorded twice, or recorded hours would double-count.
 
 ---
 
@@ -291,8 +297,7 @@ tasks, see above).
 | id | pk | |
 | regular_task_id | fk → regular_task | |
 | student_id | fk → student | |
-| session_id | fk → attendance_session | |
-| slot_id | fk → slot null | |
+| session_id | fk → attendance_session | the session it was ticked in — tasks belong to the session, not to one hour of it |
 | completed_at | ts | |
 | period_key | text | e.g. "2026-W37" (weekly) / "2026-09-08" (daily) / a random key (unlimited) |
 | proof_s3_key | text null | student's completion photo (e.g. clean fridge) |
@@ -312,6 +317,7 @@ whose period_key is never reused.
 | status | enum | open / claimed / done |
 | claimed_by | fk → student null | |
 | claimed_at | ts null | |
+| session_id | fk → attendance_session null | the session it was ticked done in |
 | event_date | date null | when set, the task is "due" — banners on the student's
   sign-in page from that date on, until it's marked done |
 | reference_s3_key | text null | admin's "what to do" photo (e.g. dirty fridge) |
@@ -405,7 +411,7 @@ Fixed UI text, bilingual. Can be a static JSON file rather than a table.
 - One-student-per-slot is a DB uniqueness constraint, not just app logic — solver,
   manual edits, and FCFS claims all funnel through `assignment`.
 - Store `solver_weights` per schedule so a committed schedule is reproducible.
-- Keep `timecard_upload` and `hourly_report` fully separate.
+- Keep `timecard_upload` and the session report fully separate.
 - `period_key` on `task_completion` makes cadence guarding trivial: compute the key
   from the task's frequency at completion time and rely on the unique index.
 - `regular_slot_template` is the source of truth for the recurring pattern;

@@ -20,11 +20,12 @@
     <template v-else-if="today">
       <div class="panel" v-if="!today.scheduled_slots.length">No shifts scheduled today. 今天沒有排班</div>
 
-      <div class="panel" v-if="reportedSlots.length">
+      <div class="panel" v-if="today.earlier_sessions.length">
         <h3>Already reported today 今日已回報</h3>
-        <div v-for="s in reportedSlots" v-bind:key="s.id" style="margin-bottom:8px;">
-          <strong class="mono">[[ s.hour ]]:00</strong>
-          <span class="hint" v-if="s.note"> — [[ s.note ]]</span>
+        <div v-for="sess in today.earlier_sessions" v-bind:key="sess.id" style="margin-bottom:8px;">
+          <strong class="mono">[[ hoursLabel(sess.hours) ]]</strong>
+          <span class="hint mono"> · [[ formatTime(sess.signed_in_at) ]]–[[ formatTime(sess.signed_out_at) ]]</span>
+          <div class="hint" v-if="sess.note">[[ sess.note ]]</div>
         </div>
       </div>
 
@@ -33,7 +34,7 @@
           <span class="mono" v-for="s in today.scheduled_slots" v-bind:key="s.id" style="margin-right:8px;">[[ s.hour ]]:00</span>
         </p>
         <button v-bind:disabled="busy || !canSignIn" v-on:click="signIn">Sign in 簽到</button>
-        <p class="hint" v-if="!canSignIn && unreportedSlots.length === 0">
+        <p class="hint" v-if="!canSignIn && !uncoveredSlots.length">
           All your scheduled hours today are already reported.
         </p>
         <p class="hint" v-else-if="!today.scheduled_slots.some(s => s.sign_in_open)">
@@ -41,55 +42,59 @@
         </p>
       </div>
 
+      <!-- One report for the whole session: a shift is usually a 4-hour run and
+           the work carries from one hour into the next, so hour-by-hour boxes
+           were both tedious and misleading. -->
       <div class="panel" v-if="today.open_session">
         <span class="badge ok">Currently signed in 在班中</span>
-        <p class="hint" v-if="!unreportedSlots.length">
-          Nothing left to report — sign out to close this session.
+        <p class="mono" v-if="today.session_hours.length" style="margin-top:8px;">
+          This session: [[ hoursLabel(today.session_hours) ]]
+          <span class="hint">([[ today.session_hours.length ]] hour[[ today.session_hours.length === 1 ? '' : 's' ]])</span>
         </p>
-        <div v-for="s in unreportedSlots" v-bind:key="s.id" style="margin:14px 0; padding-bottom:14px; border-bottom:1px solid var(--rule);">
-          <strong class="mono">[[ s.hour ]]:00</strong>
-          <div class="field">
-            <label>What you did 工作紀錄</label>
-            <textarea rows="2" v-model="reportRows[s.id].note"></textarea>
-          </div>
+        <p class="hint" v-else>No scheduled hours left to record — this session is flagged for the overseer.</p>
 
-          <div v-if="tasks.regular_tasks.length">
-            <label>Regular tasks 例行任務</label>
-            <div v-for="rt in tasks.regular_tasks" v-bind:key="rt.id" style="margin-bottom:6px;">
-              <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
-                <input type="checkbox" v-model="reportRows[s.id].regular[rt.id]" style="width:auto;">
-                [[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
-                <span class="badge warn" v-if="rt.photo_required">photo required</span>
-              </label>
-              <div class="hint task-desc" style="margin-left:24px;" v-if="rt.description">[[ rt.description ]]</div>
-              <div v-if="reportRows[s.id].regular[rt.id] && rt.reference_s3_key" style="margin:4px 0 4px 24px;">
-                <button class="secondary" type="button" v-on:click="viewReference('regular', rt.id)">View reference photo</button>
-              </div>
-              <div v-if="reportRows[s.id].regular[rt.id]" style="margin-left:24px;">
-                <input type="file" accept="image/*" v-on:change="onProofFile($event, 'regular', s.id, rt.id)">
-              </div>
+        <div class="field">
+          <label>What you did this session 本班工作紀錄</label>
+          <textarea rows="4" v-model="report.note" placeholder="One write-up for the whole shift — any language."></textarea>
+        </div>
+
+        <div v-if="tasks.regular_tasks.length">
+          <label>Regular tasks 例行任務</label>
+          <div v-for="rt in tasks.regular_tasks" v-bind:key="rt.id" style="margin-bottom:6px;">
+            <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+              <input type="checkbox" v-model="report.regular[rt.id]" style="width:auto;">
+              [[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
+              <span class="badge warn" v-if="rt.photo_required">photo required</span>
+            </label>
+            <div class="hint task-desc" style="margin-left:24px;" v-if="rt.description">[[ rt.description ]]</div>
+            <div v-if="report.regular[rt.id] && rt.reference_s3_key" style="margin:4px 0 4px 24px;">
+              <button class="secondary" type="button" v-on:click="viewReference('regular', rt.id)">View reference photo</button>
             </div>
-          </div>
-
-          <div v-if="tasks.custom_tasks.length">
-            <label>Custom tasks 自訂任務</label>
-            <div v-for="ct in tasks.custom_tasks" v-bind:key="ct.id" style="margin-bottom:6px;">
-              <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
-                <input type="checkbox" v-model="reportRows[s.id].custom[ct.id]" style="width:auto;">
-                [[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
-                <span class="badge warn" v-if="ct.photo_required">photo required</span>
-              </label>
-              <div class="hint task-desc" style="margin-left:24px;" v-if="ct.description">[[ ct.description ]]</div>
-              <div v-if="reportRows[s.id].custom[ct.id] && ct.reference_s3_key" style="margin:4px 0 4px 24px;">
-                <button class="secondary" type="button" v-on:click="viewReference('custom', ct.id)">View reference photo</button>
-              </div>
-              <div v-if="reportRows[s.id].custom[ct.id]" style="margin-left:24px;">
-                <input type="file" accept="image/*" v-on:change="onProofFile($event, 'custom', s.id, ct.id)">
-              </div>
+            <div v-if="report.regular[rt.id]" style="margin-left:24px;">
+              <input type="file" accept="image/*" v-on:change="onProofFile($event, 'regular', rt.id)">
             </div>
           </div>
         </div>
-        <button v-bind:disabled="busy" v-on:click="signOut">Sign out 簽退</button>
+
+        <div v-if="tasks.custom_tasks.length">
+          <label>Custom tasks 自訂任務</label>
+          <div v-for="ct in tasks.custom_tasks" v-bind:key="ct.id" style="margin-bottom:6px;">
+            <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+              <input type="checkbox" v-model="report.custom[ct.id]" style="width:auto;">
+              [[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
+              <span class="badge warn" v-if="ct.photo_required">photo required</span>
+            </label>
+            <div class="hint task-desc" style="margin-left:24px;" v-if="ct.description">[[ ct.description ]]</div>
+            <div v-if="report.custom[ct.id] && ct.reference_s3_key" style="margin:4px 0 4px 24px;">
+              <button class="secondary" type="button" v-on:click="viewReference('custom', ct.id)">View reference photo</button>
+            </div>
+            <div v-if="report.custom[ct.id]" style="margin-left:24px;">
+              <input type="file" accept="image/*" v-on:change="onProofFile($event, 'custom', ct.id)">
+            </div>
+          </div>
+        </div>
+
+        <button v-bind:disabled="busy" v-on:click="signOut" style="margin-top:12px;">Sign out 簽退</button>
         <p class="hint">Sign-out is honour-system — it isn't blocked before your shift ends. Leaving early just
           shows up as a scheduled-vs-recorded gap on the dashboard, which is the point: the app records what
           actually happened rather than forcing a minimum.</p>
@@ -102,14 +107,14 @@
       <p class="hint" v-if="!history.length">No past sessions yet.</p>
       <div v-for="sess in history" v-bind:key="sess.id" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--rule);">
         <div style="display:flex; justify-content:space-between; align-items:baseline;">
-          <strong class="mono">[[ sess.date ]]</strong>
+          <strong class="mono">[[ sess.date ]] <span class="hint">[[ hoursLabel(sess.hours) ]]</span></strong>
           <span class="hint mono">[[ formatTime(sess.signed_in_at) ]] – [[ sess.signed_out_at ? formatTime(sess.signed_out_at) : 'still open' ]]</span>
         </div>
         <span class="badge warn" v-if="sess.flagged">[[ sess.flag_reason ]]</span>
-        <div v-for="r in sess.reports" v-bind:key="r.slot.id" style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
-          <span class="mono">[[ r.slot.hour ]]:00</span>
-          <span v-if="r.note"> — [[ r.note ]]</span>
-          <div class="hint" v-if="taskLabels(r).length">✓ [[ taskLabels(r).join(', ') ]]</div>
+        <div style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
+          <span v-if="sess.note">[[ sess.note ]]</span>
+          <span class="hint" v-else>No write-up.</span>
+          <div class="hint" v-if="taskLabels(sess).length">✓ [[ taskLabels(sess).join(', ') ]]</div>
         </div>
       </div>
     </div>
@@ -123,21 +128,19 @@ const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
-      today: null, tasks: { regular_tasks: [], custom_tasks: [] }, reportRows: {}, proofFiles: {},
+      today: null, tasks: { regular_tasks: [], custom_tasks: [] },
+      report: { note: "", regular: {}, custom: {} }, proofFiles: {},
       history: [], loading: true, busy: false, message: "",
     };
   },
   computed: {
-    unreportedSlots() {
-      return this.today ? this.today.scheduled_slots.filter(s => !s.already_reported) : [];
-    },
-    reportedSlots() {
-      return this.today ? this.today.scheduled_slots.filter(s => s.already_reported) : [];
+    uncoveredSlots() {
+      return this.today ? this.today.scheduled_slots.filter(s => !s.covered) : [];
     },
     canSignIn() {
       if (!this.today) return false;
       if (!this.today.scheduled_slots.length) return true; // flags as not-scheduled, allowed
-      return this.unreportedSlots.some(s => s.sign_in_open);
+      return this.uncoveredSlots.some(s => s.sign_in_open);
     },
   },
   async mounted() {
@@ -151,13 +154,15 @@ const app = createApp({
         this.today = await OIA.api.get("/api/attendance/today");
         if (this.today.open_session) {
           this.tasks = await OIA.api.get("/api/attendance/tasks");
-          this.unreportedSlots.forEach(s => {
-            if (!this.reportRows[s.id]) this.reportRows[s.id] = { note: "", regular: {}, custom: {} };
-          });
         }
       } finally {
         this.loading = false;
       }
+    },
+    hoursLabel(hours) {
+      if (!hours || !hours.length) return "no hours recorded";
+      const first = hours[0].hour, last = hours[hours.length - 1].hour;
+      return String(first).padStart(2, "0") + ":00–" + String(last + 1).padStart(2, "0") + ":00";
     },
     async signIn() {
       this.busy = true; this.message = "";
@@ -165,9 +170,9 @@ const app = createApp({
       catch (e) { this.message = e.message; }
       finally { this.busy = false; }
     },
-    onProofFile(evt, kind, slotId, taskId) {
+    onProofFile(evt, kind, taskId) {
       const file = evt.target.files[0];
-      this.proofFiles[kind + "_" + slotId + "_" + taskId] = file || null;
+      this.proofFiles[kind + "_" + taskId] = file || null;
     },
     async viewReference(kind, taskId) {
       const path = kind === "regular"
@@ -186,30 +191,28 @@ const app = createApp({
       const res = await OIA.api.post("/api/attendance/upload-proof-photo", form);
       return res.s3_key;
     },
+    async collectTasks(kind) {
+      const out = [];
+      for (const [taskId, checked] of Object.entries(this.report[kind])) {
+        if (!checked) continue;
+        const file = this.proofFiles[kind + "_" + taskId];
+        const proof_s3_key = file ? await this.stagePhoto(file) : null;
+        out.push(proof_s3_key ? { id: Number(taskId), proof_s3_key } : Number(taskId));
+      }
+      return out;
+    },
     async signOut() {
       this.busy = true; this.message = "";
       try {
-        const reports = [];
-        for (const s of this.unreportedSlots) {
-          const row = this.reportRows[s.id];
-          const regular_task_ids = [];
-          for (const [taskId, checked] of Object.entries(row.regular)) {
-            if (!checked) continue;
-            const file = this.proofFiles["regular_" + s.id + "_" + taskId];
-            const proof_s3_key = file ? await this.stagePhoto(file) : null;
-            regular_task_ids.push(proof_s3_key ? { id: Number(taskId), proof_s3_key } : Number(taskId));
-          }
-          const custom_task_ids = [];
-          for (const [taskId, checked] of Object.entries(row.custom)) {
-            if (!checked) continue;
-            const file = this.proofFiles["custom_" + s.id + "_" + taskId];
-            const proof_s3_key = file ? await this.stagePhoto(file) : null;
-            custom_task_ids.push(proof_s3_key ? { id: Number(taskId), proof_s3_key } : Number(taskId));
-          }
-          reports.push({ slot_id: s.id, note: row.note, regular_task_ids, custom_task_ids });
-        }
-        const res = await OIA.api.post("/api/attendance/sign-out", { session_id: this.today.open_session.id, reports });
+        const res = await OIA.api.post("/api/attendance/sign-out", {
+          session_id: this.today.open_session.id,
+          note: this.report.note,
+          regular_task_ids: await this.collectTasks("regular"),
+          custom_task_ids: await this.collectTasks("custom"),
+        });
         this.message = res.skipped && res.skipped.length ? "Signed out — some tasks need a photo to count as done." : "Signed out.";
+        this.report = { note: "", regular: {}, custom: {} };
+        this.proofFiles = {};
         await this.load();
         this.history = await OIA.api.get("/api/attendance/history");
       } catch (e) {
@@ -221,10 +224,10 @@ const app = createApp({
     formatTime(iso) {
       return iso ? iso.slice(11, 16) : "";
     },
-    taskLabels(report) {
+    taskLabels(session) {
       const labels = [];
-      (report.regular_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
-      (report.custom_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      (session.regular_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
+      (session.custom_tasks_done || []).forEach(t => labels.push(t.title_zh || t.title_en));
       return labels;
     },
   },

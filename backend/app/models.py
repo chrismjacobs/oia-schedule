@@ -406,9 +406,15 @@ class AttendanceSession(db.Model):
     signed_out_at = db.Column(db.DateTime, nullable=True)
     flagged = db.Column(db.Boolean, nullable=False, default=False)
     flag_reason = db.Column(db.String(64), nullable=True)  # forgot_sign_out | not_scheduled
+    # One report for the whole session, written at sign-out. A shift is
+    # usually a 4-hour run and the work carries across the hour boundaries,
+    # so hour-by-hour boxes were both tedious and misleading (CLAUDE.md #9).
+    note = db.Column(db.Text, nullable=True)
 
     student = db.relationship("Student")
-    hourly_reports = db.relationship("HourlyReport", back_populates="session", cascade="all, delete-orphan")
+    hours = db.relationship("SessionHour", back_populates="session", cascade="all, delete-orphan")
+    task_completions = db.relationship("TaskCompletion", back_populates="session")
+    custom_task_claims = db.relationship("CustomTask", back_populates="session")
 
     def to_dict(self):
         return {
@@ -419,29 +425,29 @@ class AttendanceSession(db.Model):
             "signed_out_at": self.signed_out_at.isoformat() if self.signed_out_at else None,
             "flagged": self.flagged,
             "flag_reason": self.flag_reason,
+            "note": self.note,
         }
 
 
-class HourlyReport(db.Model):
-    __tablename__ = "hourly_report"
+class SessionHour(db.Model):
+    """Which scheduled hours one session actually covered — the recorded side
+    of scheduled-vs-recorded (CLAUDE.md #1). Pure coverage: the write-up and
+    the task ticks live on the session, not here."""
+    __tablename__ = "session_hour"
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey("attendance_session.id"), nullable=False)
     slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=False)
-    note = db.Column(db.Text, nullable=True)
 
-    session = db.relationship("AttendanceSession", back_populates="hourly_reports")
+    session = db.relationship("AttendanceSession", back_populates="hours")
     slot = db.relationship("Slot")
-    task_completions = db.relationship("TaskCompletion", back_populates="hourly_report")
-    custom_task_claims = db.relationship("CustomTask", back_populates="hourly_report")
 
-    __table_args__ = (db.UniqueConstraint("session_id", "slot_id", name="uq_hourly_report_session_slot"),)
+    __table_args__ = (db.UniqueConstraint("session_id", "slot_id", name="uq_session_hour_session_slot"),)
 
     def to_dict(self):
         return {
             "id": self.id,
             "session_id": self.session_id,
             "slot_id": self.slot_id,
-            "note": self.note,
         }
 
 
@@ -477,15 +483,13 @@ class TaskCompletion(db.Model):
     regular_task_id = db.Column(db.Integer, db.ForeignKey("regular_task.id"), nullable=False)
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
     session_id = db.Column(db.Integer, db.ForeignKey("attendance_session.id"), nullable=False)
-    hourly_report_id = db.Column(db.Integer, db.ForeignKey("hourly_report.id"), nullable=True)
-    slot_id = db.Column(db.Integer, db.ForeignKey("slot.id"), nullable=True)
     completed_at = db.Column(db.DateTime, nullable=False, default=local_now)
     period_key = db.Column(db.String(64), nullable=False)  # "u-<uuid4>" for unlimited tasks needs the room
     proof_s3_key = db.Column(db.String(255), nullable=True)  # student's completion photo
 
     regular_task = db.relationship("RegularTask")
     student = db.relationship("Student")
-    hourly_report = db.relationship("HourlyReport", back_populates="task_completions")
+    session = db.relationship("AttendanceSession", back_populates="task_completions")
 
     __table_args__ = (
         db.UniqueConstraint("regular_task_id", "period_key", name="uq_task_completion_period"),
@@ -496,6 +500,7 @@ class TaskCompletion(db.Model):
             "id": self.id,
             "regular_task_id": self.regular_task_id,
             "student_id": self.student_id,
+            "session_id": self.session_id,
             "completed_at": self.completed_at.isoformat(),
             "period_key": self.period_key,
             "proof_s3_key": self.proof_s3_key,
@@ -512,14 +517,14 @@ class CustomTask(db.Model):
     status = db.Column(db.String(16), nullable=False, default="open")  # open|claimed|done
     claimed_by = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)
     claimed_at = db.Column(db.DateTime, nullable=True)
-    hourly_report_id = db.Column(db.Integer, db.ForeignKey("hourly_report.id"), nullable=True)
+    session_id = db.Column(db.Integer, db.ForeignKey("attendance_session.id"), nullable=True)
     event_date = db.Column(db.Date, nullable=True)  # set -> banners on sign-in from this date until done
     reference_s3_key = db.Column(db.String(255), nullable=True)  # admin's "what to do" photo
     photo_required = db.Column(db.Boolean, nullable=False, default=False)
     proof_s3_key = db.Column(db.String(255), nullable=True)  # student's completion photo
 
     claimer = db.relationship("Student")
-    hourly_report = db.relationship("HourlyReport", back_populates="custom_task_claims")
+    session = db.relationship("AttendanceSession", back_populates="custom_task_claims")
 
     def to_dict(self):
         return {
