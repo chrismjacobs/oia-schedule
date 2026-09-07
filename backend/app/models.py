@@ -168,11 +168,22 @@ class ClosedDate(db.Model):
 
 
 class SelectionWindow(db.Model):
+    """When selection is *scheduled* to open and close. It does not itself
+    decide whether selection is open — month.state does (see
+    availability._window_is_open). This only tells /tick when to move the
+    state, once each, which is what lets the overseer override by hand
+    without the next cron ping undoing them.
+
+    The applied-stamps are /tick's sent-flags (CLAUDE.md #13: "what is due and
+    not yet done?"). Saving new times clears them, so a rescheduled window
+    fires again."""
     __tablename__ = "selection_window"
     id = db.Column(db.Integer, primary_key=True)
     month_id = db.Column(db.Integer, db.ForeignKey("month.id"), nullable=False, unique=True)
     opens_at = db.Column(db.DateTime, nullable=False)
     closes_at = db.Column(db.DateTime, nullable=False)
+    opened_applied_at = db.Column(db.DateTime, nullable=True)
+    closed_applied_at = db.Column(db.DateTime, nullable=True)
 
     month = db.relationship("Month", back_populates="selection_window")
 
@@ -182,6 +193,8 @@ class SelectionWindow(db.Model):
             "month_id": self.month_id,
             "opens_at": self.opens_at.isoformat(),
             "closes_at": self.closes_at.isoformat(),
+            "opened_applied_at": self.opened_applied_at.isoformat() if self.opened_applied_at else None,
+            "closed_applied_at": self.closed_applied_at.isoformat() if self.closed_applied_at else None,
         }
 
 

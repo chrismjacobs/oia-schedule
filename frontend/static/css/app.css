@@ -369,6 +369,27 @@ table.data td.desc-cell {
 }
 table.data td.row-actions { white-space: nowrap; }
 
+/* Plain-language answer to "can students act right now?", above the controls
+   that decide it. Status colours only — never the student palette. */
+.statusline {
+  border-radius: 10px; padding: 10px 12px; font-size: 13px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+  border-left: 3px solid var(--open);
+  background: var(--open-bg); color: var(--ink-2);
+}
+.statusline.is-open { border-left-color: var(--ok); background: #E7F0EB; }
+.statusline.is-shut { border-left-color: var(--warn); background: var(--warn-bg); }
+
+/* A numbered step: what it is and its state on the left, its actions right. */
+.buildstep {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--rule); border-radius: 10px;
+  padding: 10px 12px; margin-top: 10px; background: var(--paper);
+}
+.buildstep strong { font-size: 13px; }
+.buildstep .hint { margin-top: 2px; }
+
 /* Inline-editable field inside a table row (student ID, insurance number on
    the dashboard) — reads as a value until you touch it, not as a form. */
 td.edit-cell { white-space: nowrap; }

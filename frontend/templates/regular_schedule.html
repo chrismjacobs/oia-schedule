@@ -3,50 +3,112 @@
 {% block content %}
 <div id="regular-app" v-cloak>
 
+  <!-- ============ 1. Month setup ============ -->
   <div class="panel">
-    <h2>Months 月份排程</h2>
-    <div class="field-row">
-      <div class="field"><label>Select month</label>
+    <h2>Month setup 月份設定</h2>
+    <p class="hint">Pick the month you're working on, and set the days the office is shut.
+      Closed dates produce no slots at all.</p>
+
+    <div class="field-row" style="margin-top:10px;">
+      <div class="field"><label>Month 月份</label>
         <select v-model.number="monthId">
-          <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] ([[ m.state ]])</option>
+          <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] — [[ m.state ]]</option>
         </select>
       </div>
-      <div class="field"><label>New month (YYYY-MM)</label><input v-model="newMonthYm" placeholder="2026-10"></div>
-      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" v-on:click="createMonth">Create</button></div>
+      <div class="field"><label>Add a month (YYYY-MM)</label><input v-model="newMonthYm" placeholder="2026-11"></div>
+      <div class="field" style="align-self:end;"><button class="secondary" v-bind:disabled="busy" v-on:click="createMonth">Create</button></div>
     </div>
 
     <template v-if="monthId">
-      <p>State: <strong>[[ currentMonthState ]]</strong></p>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;">
-        <button class="secondary" v-on:click="setMonthState('selection_open')">→ selection_open</button>
-        <button class="secondary" v-on:click="setMonthState('selection_closed')">→ selection_closed</button>
-        <button class="secondary" v-on:click="setMonthState('committed')">→ committed</button>
-        <button class="secondary" v-on:click="setMonthState('running')">→ running</button>
-      </div>
-
-      <h3>Closed dates 休假日 / 關閉日</h3>
-      <ul style="padding-left:18px; margin-bottom:10px;">
-        <li v-for="c in closedDates" v-bind:key="c.id">[[ c.date ]] — [[ c.reason ]] <button class="secondary" v-on:click="removeClosedDate(c.id)">Delete</button></li>
+      <h3 style="margin-top:8px;">Closed dates 休假日</h3>
+      <p class="hint" v-if="!closedDates.length">None — the office is open every weekday this month.</p>
+      <ul style="padding-left:18px; margin-bottom:10px;" v-else>
+        <li v-for="c in closedDates" v-bind:key="c.id" style="margin-bottom:4px;">
+          <span class="mono">[[ c.date ]]</span> [[ c.reason ]]
+          <button class="secondary" v-on:click="removeClosedDate(c.id)">Delete</button>
+        </li>
       </ul>
       <form v-on:submit.prevent="addClosedDate" class="field-row">
         <div class="field"><label>Date</label><input type="date" v-model="newClosedDate.date" required></div>
-        <div class="field"><label>Reason</label><input v-model="newClosedDate.reason"></div>
-        <div class="field" style="align-self:end;"><button type="submit">Save</button></div>
+        <div class="field"><label>Reason</label><input v-model="newClosedDate.reason" placeholder="National holiday"></div>
+        <div class="field" style="align-self:end;"><button class="secondary" type="submit">Add</button></div>
       </form>
-
-      <h3 style="margin-top:16px;">Selection window 選填時段開放區間</h3>
-      <div class="field-row">
-        <div class="field"><label>Opens</label><input type="datetime-local" v-model="swOpens"></div>
-        <div class="field"><label>Closes</label><input type="datetime-local" v-model="swCloses"></div>
-        <div class="field" style="align-self:end;"><button v-on:click="saveSelectionWindow">Save</button></div>
-      </div>
-
-      <h3 style="margin-top:16px;">Generate slots 產生時段</h3>
-      <p class="hint">Run this after the regular schedule below looks right — any hour marked
-        Unavailable there won't get a slot at all.</p>
-      <button v-bind:disabled="busy" v-on:click="generateSlots">Generate slots</button>
-      <p class="hint">[[ genMessage ]]</p>
     </template>
+  </div>
+
+  <!-- ============ 2. Selection control ============ -->
+  <div class="panel" v-if="monthId">
+    <h2>Selection control [[ currentMonthYm ]] <span class="hint">選填開放控制</span></h2>
+
+    <div class="statusline" v-bind:class="selectionOpen ? 'is-open' : 'is-shut'">
+      <strong>[[ selectionOpen ? 'Students CAN pick hours right now' : 'Students CANNOT pick hours right now' ]]</strong>
+      <span class="hint">— the state below is what decides this, on its own.</span>
+    </div>
+
+    <div class="field-row" style="margin-top:12px;">
+      <div class="field"><label>State 狀態 — this is the switch</label>
+        <select v-bind:value="currentMonthState" v-bind:disabled="busy"
+                v-on:change="setMonthState($event.target.value)">
+          <option v-for="s in MONTH_STATES" v-bind:key="s" v-bind:value="s">[[ s ]][[ s === forwardStep ? '  (usual next step)' : '' ]]</option>
+        </select>
+      </div>
+      <div class="field" style="flex:2 1 340px;">
+        <label>What that means</label>
+        <p class="hint" style="margin-top:6px;">[[ STATE_HELP[currentMonthState] ]]</p>
+      </div>
+    </div>
+    <p class="hint" v-if="monthMessage" style="margin-bottom:10px;">[[ monthMessage ]]</p>
+
+    <h3 style="margin-top:14px;">Scheduled open / close 自動開關時間</h3>
+    <p class="hint">These don't open selection themselves — they tell the background job when to
+      <em>move the state for you</em>, once each. Change the state by hand at any time and it sticks;
+      the schedule won't undo it. Saving new times re-arms them.</p>
+    <div class="field-row" style="margin-top:8px;">
+      <div class="field"><label>Opens</label><input type="datetime-local" v-model="swOpens"></div>
+      <div class="field"><label>Closes</label><input type="datetime-local" v-model="swCloses"></div>
+      <div class="field" style="align-self:end;"><button class="secondary" v-on:click="saveSelectionWindow">Save times</button></div>
+    </div>
+    <p class="hint" v-if="window">
+      Opens: [[ window.opened_applied_at ? 'already applied ' + window.opened_applied_at.slice(0, 16).replace('T', ' ') : 'pending' ]]
+      · Closes: [[ window.closed_applied_at ? 'already applied ' + window.closed_applied_at.slice(0, 16).replace('T', ' ') : 'pending' ]]
+    </p>
+    <p class="hint" v-else>No schedule set — the state only ever changes when you change it.</p>
+  </div>
+
+  <!-- ============ 3. Build this month's slots ============ -->
+  <div class="panel" v-if="monthId">
+    <h2>Build slots 產生時段 <span class="hint">[[ currentMonthYm ]]</span></h2>
+    <p class="hint">Two steps, in order. The weekly pattern below is copied into this month, then
+      turned into the slots students actually tick. Until slots exist, the availability grid is
+      blank for everyone no matter what the state says.</p>
+
+    <div class="buildstep">
+      <div>
+        <strong>1. Pattern → this month</strong>
+        <p class="hint">[[ regularSlots.length ? regularSlots.length + ' cells set for this month.' : 'Not copied yet.' ]]
+          <span v-if="staleCount"> · <b>[[ staleCount ]] differ from the master template</b> — re-sync to apply your template edits.</span></p>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button class="secondary" v-bind:disabled="busy" v-on:click="populateMonth(false)">Fill missing</button>
+        <button class="secondary" v-bind:disabled="busy" v-on:click="populateMonth(true)">Re-sync from template</button>
+      </div>
+    </div>
+    <p class="hint" v-if="populateMessage">[[ populateMessage ]]</p>
+
+    <div class="buildstep">
+      <div>
+        <strong>2. This month → slots</strong>
+        <p class="hint">[[ slotCount === null ? '…' : slotCount + ' slots exist.' ]]
+          Hours marked Unavailable never get one.</p>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button v-bind:disabled="busy" v-on:click="generateSlots(false)">Generate slots</button>
+        <button class="danger" v-bind:disabled="busy" v-on:click="generateSlots(true)">Regenerate</button>
+      </div>
+    </div>
+    <p class="hint" v-if="genMessage">[[ genMessage ]]</p>
+    <p class="hint">Regenerating deletes this month's slots and every availability tick against them.
+      Refused once a schedule is committed.</p>
   </div>
 
   <div class="panel">
@@ -137,16 +199,37 @@ const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const WEEKDAYS = [0, 1, 2, 3, 4];
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
+const MONTH_STATES = ["setup", "selection_open", "selection_closed", "draft",
+                      "review", "committed", "running", "closed"];
+const MONTH_FORWARD = {
+  setup: "selection_open", selection_open: "selection_closed",
+  selection_closed: "draft", draft: "review", review: "committed",
+  committed: "running", running: "closed", closed: null,
+};
+// What each state actually gates — kept in step with the backend checks so
+// the dropdown isn't a list of opaque words.
+const STATE_HELP = {
+  setup: "Nothing is open. Set closed dates and the regular pattern here, then generate slots.",
+  selection_open: "Students can pick hours — but only while the clock is also inside the selection window below.",
+  selection_closed: "Students are locked out. This is the state the solver draws a draft from.",
+  draft: "A draft exists. Generating one moves the month straight to review.",
+  review: "You're editing the draft grid. Nothing else keys off this state.",
+  committed: "Published: the roster notification has fired and students see their shifts. Unfilled slots start being auto-advertised.",
+  running: "Same as committed, plus no-show detection. The only state you can close the month from.",
+  closed: "Finished. The close-out report is generated from here.",
+};
+
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
       students: [], months: [], monthId: null,
       template: [], regularSlots: [],
-      HOURS, WEEKDAYS, WEEKDAY_LABELS,
-      busy: false, populateMessage: "", narrow: false,
+      HOURS, WEEKDAYS, WEEKDAY_LABELS, MONTH_STATES, STATE_HELP,
+      busy: false, populateMessage: "", narrow: false, monthMessage: "",
       newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
       swOpens: "", swCloses: "", genMessage: "",
+      window: null, slotCount: null,
     };
   },
   computed: {
@@ -176,6 +259,25 @@ const app = createApp({
     currentMonthYm() {
       const m = this.months.find(m => m.id === this.monthId);
       return m ? m.year_month : "";
+    },
+    forwardStep() { return MONTH_FORWARD[this.currentMonthState] || null; },
+    // One gate now: the state alone. Mirrors availability._window_is_open.
+    selectionOpen() { return this.currentMonthState === "selection_open"; },
+    // How many of this month's cells disagree with the master template —
+    // i.e. what a re-sync would change. This is the number that was invisible
+    // before, so template edits looked like they had silently done nothing.
+    staleCount() {
+      if (!this.regularSlots.length || !this.template.length) return 0;
+      let n = 0;
+      this.regularSlots.forEach(r => {
+        const wd = OIA.mondayWeekday(r.date);
+        const t = this.templateByKey[wd + "_" + r.hour];
+        if (!t) return;
+        const tStudent = t.state === "assigned" ? t.student_id : null;
+        const rStudent = r.state === "assigned" ? r.student_id : null;
+        if (t.state !== r.state || tStudent !== rStudent) n++;
+      });
+      return n;
     },
   },
   watch: {
@@ -258,11 +360,20 @@ const app = createApp({
       this.regularSlots = list;
     },
 
-    async populateMonth() {
+    async populateMonth(resync) {
+      if (resync && this.staleCount &&
+          !confirm("Re-sync overwrites " + this.staleCount + " cell(s) in " + this.currentMonthYm +
+                   " with the master template, discarding any one-off edits made for this month. Continue?")) {
+        return;
+      }
       this.busy = true; this.populateMessage = "";
       try {
-        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots/populate");
-        this.populateMessage = "Added " + res.created + " cell(s).";
+        const res = await OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/regular-slots/populate", { resync: !!resync });
+        this.populateMessage = resync
+          ? "Added " + res.created + ", updated " + res.updated + " cell(s) from the template."
+          : "Added " + res.created + " missing cell(s)." +
+            (this.staleCount ? " " + this.staleCount + " still differ — use Re-sync to apply those." : "");
         this.regularSlots = await OIA.api.get("/api/admin/months/" + this.monthId + "/regular-slots");
       } catch (e) {
         this.populateMessage = e.message;
@@ -277,42 +388,81 @@ const app = createApp({
       if (!this.monthId) return;
       this.closedDates = await OIA.api.get("/api/admin/months/" + this.monthId + "/closed-dates");
       const sw = await OIA.api.get("/api/admin/months/" + this.monthId + "/selection-window");
+      this.window = sw;
       this.swOpens = sw ? sw.opens_at.slice(0, 16) : "";
       this.swCloses = sw ? sw.closes_at.slice(0, 16) : "";
+      await this.loadSlotCount();
+    },
+    async loadSlotCount() {
+      const grid = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
+      this.slotCount = grid.slots.length;
     },
     async createMonth() {
-      this.busy = true;
+      this.busy = true; this.monthMessage = "";
       try {
         const m = await OIA.api.post("/api/admin/months", { year_month: this.newMonthYm });
         this.newMonthYm = "";
         await this.loadMonths();
         this.monthId = m.id;
+      } catch (e) {
+        this.monthMessage = e.message === "month_exists" ? "That month already exists."
+          : e.message === "year_month_required" ? "Enter a month as YYYY-MM."
+          : e.message;
       } finally { this.busy = false; }
     },
     async setMonthState(state) {
-      await OIA.api.patch("/api/admin/months/" + this.monthId, { state });
-      await this.loadMonths();
+      this.busy = true; this.monthMessage = "";
+      try {
+        const res = await OIA.api.patch("/api/admin/months/" + this.monthId, { state });
+        await this.loadMonths();
+        this.monthMessage = res.was_forward_step
+          ? "Now " + res.state + "."
+          : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
+      } catch (e) {
+        this.monthMessage = e.message;
+      } finally { this.busy = false; }
     },
     async addClosedDate() {
-      await OIA.api.post("/api/admin/months/" + this.monthId + "/closed-dates", this.newClosedDate);
-      this.newClosedDate = { date: "", reason: "" };
-      await this.loadMonthDetail();
+      this.monthMessage = "";
+      try {
+        await OIA.api.post("/api/admin/months/" + this.monthId + "/closed-dates", this.newClosedDate);
+        this.newClosedDate = { date: "", reason: "" };
+        await this.loadMonthDetail();
+      } catch (e) {
+        this.monthMessage = e.message === "date_already_closed"
+          ? "That date is already closed." : e.message;
+      }
     },
     async removeClosedDate(id) {
-      await OIA.api.del("/api/admin/closed-dates/" + id);
-      await this.loadMonthDetail();
+      this.monthMessage = "";
+      try {
+        await OIA.api.del("/api/admin/closed-dates/" + id);
+        await this.loadMonthDetail();
+      } catch (e) { this.monthMessage = e.message; }
     },
     async saveSelectionWindow() {
-      await OIA.api.put("/api/admin/months/" + this.monthId + "/selection-window", { opens_at: this.swOpens, closes_at: this.swCloses });
-      await this.loadMonthDetail();
+      this.monthMessage = "";
+      if (!this.swOpens || !this.swCloses) { this.monthMessage = "Set both dates."; return; }
+      try {
+        await OIA.api.put("/api/admin/months/" + this.monthId + "/selection-window", { opens_at: this.swOpens, closes_at: this.swCloses });
+        await this.loadMonthDetail();
+        this.monthMessage = "Selection window saved.";
+      } catch (e) { this.monthMessage = e.message; }
     },
-    async generateSlots() {
+    async generateSlots(regenerate) {
+      if (regenerate && !confirm(
+          "Regenerate deletes " + this.currentMonthYm + "'s existing slots and every availability " +
+          "tick students have made against them, then rebuilds from the pattern. Continue?")) {
+        return;
+      }
       this.busy = true; this.genMessage = "";
       try {
-        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/generate-slots");
+        const res = await OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/generate-slots", { regenerate: !!regenerate });
         this.genMessage = "Created " + res.created + " slots.";
+        await this.loadSlotCount();
       } catch (e) {
-        this.genMessage = e.message;
+        this.genMessage = (e.payload && e.payload.message) || e.message;
       } finally { this.busy = false; }
     },
   },

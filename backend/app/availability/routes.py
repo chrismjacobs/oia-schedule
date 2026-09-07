@@ -10,13 +10,15 @@ from app.utils.tz import local_now
 
 
 def _window_is_open(month):
-    if month.state != "selection_open":
-        return False
-    sw = SelectionWindow.query.filter_by(month_id=month.id).first()
-    if not sw:
-        return True  # no configured window: state alone gates it
-    now = local_now()
-    return sw.opens_at <= now <= sw.closes_at
+    """One gate, not two: the month's state alone says whether students can
+    select. The SelectionWindow only schedules when /tick moves the state.
+
+    It used to also require the clock to be inside the window, which meant
+    "is selection open?" had two answers that could disagree — a month could
+    sit in selection_open with students still locked out, with nothing on
+    screen explaining why. If the overseer sets the state by hand, that is
+    what holds."""
+    return month.state == "selection_open"
 
 
 @bp.get("/current")

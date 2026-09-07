@@ -21,26 +21,45 @@ from app.utils.tz import local_now
 
 
 def _auto_advance_selection_windows(now):
-    """Selection open/close times are config, not a button push — the window
-    itself drives the month.state transition."""
+    """Move month.state when a scheduled window boundary passes — each
+    boundary at most once, recorded on the window itself.
+
+    The once-only part matters: without it every tick re-applied the rule, so
+    an overseer who deliberately reopened or closed a month by hand had it
+    silently reverted on the next cron ping, with no way to win. The window
+    schedules; the overseer decides. Saving new times clears the stamps, which
+    is how you deliberately re-arm a boundary."""
     opened = closed = 0
-    for month in Month.query.filter(Month.state.in_(("setup", "selection_open"))).all():
-        sw = SelectionWindow.query.filter_by(month_id=month.id).first()
-        if not sw:
+    for sw in SelectionWindow.query.all():
+        month = Month.query.get(sw.month_id)
+        if not month:
             continue
-        if month.state == "setup" and now >= sw.opens_at:
-            month.state = "selection_open"
-            db.session.commit()
-            notify_selection_open(month)
-            opened += 1
+
+        if sw.opened_applied_at is None and now >= sw.opens_at:
+            sw.opened_applied_at = now
+            # Only advance a month that hasn't already moved past this point.
+            # A month someone already pushed to committed shouldn't be dragged
+            # back to selection_open just because its opens_at rolled around.
+            if month.state == "setup":
+                month.state = "selection_open"
+                db.session.commit()
+                notify_selection_open(month)
+                opened += 1
+            else:
+                db.session.commit()
+
         if month.state == "selection_open":
             warn_at = sw.closes_at - timedelta(hours=current_app.config["CLOSING_WARNING_HOURS_BEFORE"])
             if now >= warn_at:
                 notify_closing_warning(month)
-            if now >= sw.closes_at:
+
+        if sw.closed_applied_at is None and now >= sw.closes_at:
+            sw.closed_applied_at = now
+            if month.state == "selection_open":
                 month.state = "selection_closed"
-                db.session.commit()
                 closed += 1
+            db.session.commit()
+
     return {"windows_opened": opened, "windows_closed": closed}
 
 

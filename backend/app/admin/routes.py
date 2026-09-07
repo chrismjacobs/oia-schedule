@@ -1,13 +1,13 @@
 from datetime import datetime, date as date_cls
 from uuid import uuid4
 
-from flask import jsonify, request
+from flask import jsonify, request, current_app
 
 from app.admin import bp
 from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
-    RegularSlotTemplate, RegularSlot,
+    RegularSlotTemplate, RegularSlot, Schedule, Assignment, Availability, ReopenedSlot,
     SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES, STUDENT_ID_RE, STUDENT_ID_MAX,
 )
 from app.utils.decorators import overseer_required
@@ -17,15 +17,21 @@ from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
 
-MONTH_TRANSITIONS = {
-    "setup": {"selection_open"},
-    "selection_open": {"selection_closed"},
-    "selection_closed": {"draft"},
-    "draft": {"review"},
-    "review": {"committed"},
-    "committed": {"running"},
-    "running": {"closed"},
-    "closed": set(),
+# The forward path through the cycle (CLAUDE.md #6). Used to label which move
+# is the "normal next step" in the UI — NOT to forbid anything. Going
+# backwards is a routine correction: selection closes and a student asks for
+# one more day, a month gets committed too early, a closed month needs
+# reopening. Blocking that left months permanently stuck with no way out, so
+# the overseer's dropdown is an explicit override and may set any state.
+MONTH_FORWARD = {
+    "setup": "selection_open",
+    "selection_open": "selection_closed",
+    "selection_closed": "draft",
+    "draft": "review",
+    "review": "committed",
+    "committed": "running",
+    "running": "closed",
+    "closed": None,
 }
 
 
@@ -185,16 +191,24 @@ def create_month():
 @bp.patch("/months/<int:month_id>")
 @overseer_required
 def update_month_state(month_id):
+    """Set the month's state. Any state to any state — this is the overseer's
+    manual override, and the cycle in MONTH_FORWARD is guidance, not a rail.
+    The response says whether the move was the normal next step so the UI can
+    warn about the unusual ones without refusing them."""
     month = Month.query.get_or_404(month_id)
     data = request.get_json(force=True) or {}
     new_state = data.get("state")
     if new_state not in MONTH_STATES:
-        return jsonify({"error": "invalid_state"}), 400
-    if new_state != month.state and new_state not in MONTH_TRANSITIONS.get(month.state, set()):
-        return jsonify({"error": "illegal_transition", "from": month.state, "to": new_state}), 400
+        return jsonify({"error": "invalid_state", "valid": MONTH_STATES}), 400
+
+    was = month.state
     month.state = new_state
     db.session.commit()
-    return jsonify(month.to_dict())
+
+    out = month.to_dict()
+    out["previous_state"] = was
+    out["was_forward_step"] = (new_state == MONTH_FORWARD.get(was))
+    return jsonify(out)
 
 
 # ---------------- Closed dates ----------------
@@ -257,8 +271,19 @@ def set_selection_window(month_id):
     if not sw:
         sw = SelectionWindow(month_id=month_id)
         db.session.add(sw)
-    sw.opens_at = datetime.fromisoformat(opens_at)
-    sw.closes_at = datetime.fromisoformat(closes_at)
+    new_opens = datetime.fromisoformat(opens_at)
+    new_closes = datetime.fromisoformat(closes_at)
+    if new_closes <= new_opens:
+        return jsonify({"error": "closes_before_opens",
+                        "message": "The close time must be after the open time"}), 400
+
+    # Rescheduling re-arms the boundary: a stamp only means "this exact time
+    # has already been acted on". Move the time and it's due again.
+    if sw.opens_at != new_opens:
+        sw.opened_applied_at = None
+    if sw.closes_at != new_closes:
+        sw.closed_applied_at = None
+    sw.opens_at, sw.closes_at = new_opens, new_closes
     db.session.commit()
     return jsonify(sw.to_dict())
 
@@ -312,26 +337,37 @@ def _month_weekdays_minus_closed(month):
 @bp.post("/months/<int:month_id>/regular-slots/populate")
 @overseer_required
 def populate_regular_slots(month_id):
-    """Copy the master template into this month's regular_slot rows, filling
-    in only what's missing — safe to re-run any time during setup (e.g. after
-    adding a closed date) without disturbing cells the overseer already
-    hand-edited for this month."""
-    month = Month.query.get_or_404(month_id)
-    template_by_key = {(t.weekday, t.hour): t for t in RegularSlotTemplate.query.all()}
-    existing = {(r.date, r.hour) for r in RegularSlot.query.filter_by(month_id=month.id).all()}
+    """Copy the master template into this month's regular_slot rows.
 
-    created = 0
+    Two modes, because both are genuinely wanted:
+      * default (fill) — add only missing rows, leaving this month's
+        hand-edits alone. Safe after adding a closed date.
+      * resync=true — overwrite every row from the template. This is the one
+        that was missing: once a month had its rows, editing the template
+        could never reach it again, so a corrected pattern silently applied
+        to nothing. Discards per-month exceptions, hence not the default.
+    """
+    month = Month.query.get_or_404(month_id)
+    resync = bool((request.get_json(silent=True) or {}).get("resync"))
+    template_by_key = {(t.weekday, t.hour): t for t in RegularSlotTemplate.query.all()}
+    existing = {(r.date, r.hour): r for r in RegularSlot.query.filter_by(month_id=month.id).all()}
+
+    created = updated = 0
     for d in _month_weekdays_minus_closed(month):
         for hour in SLOT_HOURS:
-            if (d, hour) in existing:
-                continue
             tmpl = template_by_key.get((d.weekday(), hour))
             state = tmpl.state if tmpl else "unassigned"
             student_id = tmpl.student_id if tmpl and tmpl.state == "assigned" else None
-            db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour, state=state, student_id=student_id))
-            created += 1
+            row = existing.get((d, hour))
+            if row is None:
+                db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour,
+                                            state=state, student_id=student_id))
+                created += 1
+            elif resync and (row.state, row.student_id) != (state, student_id):
+                row.state, row.student_id = state, student_id
+                updated += 1
     db.session.commit()
-    return jsonify({"created": created}), 201
+    return jsonify({"created": created, "updated": updated, "resync": resync}), 201
 
 
 @bp.get("/months/<int:month_id>/regular-slots")
@@ -364,9 +400,45 @@ def update_regular_slot(regular_slot_id):
 @bp.post("/months/<int:month_id>/generate-slots")
 @overseer_required
 def generate_slots(month_id):
+    """Turn this month's regular_slot plan into the Slot rows students
+    actually select against.
+
+    Re-runnable (regenerate=true): the pattern legitimately changes during
+    setup, and being one-shot meant a month generated from a wrong pattern
+    was stuck with it forever. Regenerating throws away the month's slots and
+    everything hanging off them — availability included — so it is refused
+    once a schedule is committed, where that would delete a live roster."""
     month = Month.query.get_or_404(month_id)
-    if Slot.query.filter_by(month_id=month.id).first():
-        return jsonify({"error": "slots_already_generated"}), 409
+    regenerate = bool((request.get_json(silent=True) or {}).get("regenerate"))
+    existing = Slot.query.filter_by(month_id=month.id).all()
+
+    if existing and not regenerate:
+        return jsonify({"error": "slots_already_generated",
+                        "message": f"{len(existing)} slots already exist. "
+                                   "Regenerate to rebuild them from the pattern."}), 409
+
+    if existing:
+        committed = Schedule.query.filter_by(month_id=month.id, status="committed").first()
+        if committed:
+            return jsonify({"error": "schedule_committed",
+                            "message": "This month's schedule is committed — regenerating "
+                                       "would delete the published roster."}), 409
+        slot_ids = [s.id for s in existing]
+        n_avail = Availability.query.filter(Availability.slot_id.in_(slot_ids)).delete(
+            synchronize_session=False)
+        Assignment.query.filter(Assignment.slot_id.in_(slot_ids)).delete(synchronize_session=False)
+        ReopenedSlot.query.filter(ReopenedSlot.slot_id.in_(slot_ids)).delete(synchronize_session=False)
+        Schedule.query.filter_by(month_id=month.id).delete(synchronize_session=False)
+        Slot.query.filter(Slot.id.in_(slot_ids)).delete(synchronize_session=False)
+        year_month = month.year_month
+        # Settle the deletes before rebuilding, and drop the deleted rows from
+        # the identity map: on SQLite the new slots reuse the freed primary
+        # keys, which otherwise collide with the stale objects still mapped.
+        db.session.commit()
+        db.session.expunge_all()
+        month = Month.query.get_or_404(month_id)  # re-attach after expunge
+        current_app.logger.info("regenerate slots for %s: dropped %d slots, %d availability",
+                                year_month, len(slot_ids), n_avail)
 
     # Any (date, hour) already marked unavailable in this month's regular
     # schedule never gets a Slot at all — coverage need varies month to
