@@ -2,6 +2,7 @@
 LINE Messaging API switches on once the Official Account is set up. Never
 LINE Notify — discontinued March 2025."""
 import smtplib
+import time
 from email.mime.text import MIMEText
 
 import requests
@@ -41,14 +42,31 @@ class LineBackend(NotificationBackend):
         token = cfg.get("LINE_TOKEN")
         target = to or cfg.get("LINE_GROUP_ID")
         if not token or not target:
-            current_app.logger.info("[notify:line:noop, not configured] %s", message)
-            return
+            # Loud, not info: this silently drops every notification, and the
+            # caller marks it sent, so it looks like success forever after.
+            current_app.logger.error(
+                "LINE push SKIPPED — %s not configured. Message dropped: %r",
+                "LINE_TOKEN" if not token else "LINE_GROUP_ID", message)
+            raise RuntimeError("line_not_configured")
+
+        started = time.monotonic()
         resp = requests.post(
             self.PUSH_URL,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"to": target, "messages": [{"type": "text", "text": message}]},
             timeout=10,
         )
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        # LINE's own request id is the only handle their support can trace.
+        request_id = resp.headers.get("x-line-request-id")
+        if resp.status_code >= 400:
+            current_app.logger.error(
+                "LINE push FAILED %s in %sms | to=%s | request_id=%s | body=%s",
+                resp.status_code, elapsed_ms, target, request_id, resp.text[:500])
+        else:
+            current_app.logger.info(
+                "LINE push OK %s in %sms | to=%s | request_id=%s",
+                resp.status_code, elapsed_ms, target, request_id)
         resp.raise_for_status()
 
     def reply(self, reply_token: str, message: str):

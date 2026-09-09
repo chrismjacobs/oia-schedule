@@ -1,4 +1,6 @@
+import logging
 import os
+import sys
 
 from flask import Flask, jsonify
 
@@ -6,6 +8,42 @@ from app.config import Config, BASE_DIR
 from app.extensions import db, migrate, login_manager
 
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+
+
+def _safe_db_identity(uri):
+    """host/database only — never the password. Printed at boot so it's
+    obvious which database a deployment is actually talking to; 'the app I'm
+    debugging locally and the app on Render disagree' is otherwise very hard
+    to see."""
+    try:
+        from sqlalchemy.engine.url import make_url
+        u = make_url(uri)
+        return f"{u.drivername}://{u.host or 'local'}/{u.database}"
+    except Exception:
+        return "unparseable"
+
+
+def configure_logging(app):
+    """Log INFO to stdout so Render's log stream actually shows the app's
+    reasoning. Flask's logger inherits WARNING from the root logger when not
+    in debug, which silently swallows every info-level breadcrumb — including
+    everything /tick reports about what it did and why."""
+    level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(
+        "[%(asctime)s] %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+
+    root = logging.getLogger()
+    root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
+    root.addHandler(handler)
+    root.setLevel(level)
+
+    app.logger.handlers = []
+    app.logger.propagate = True
+    app.logger.setLevel(level)
+    # Chatty at INFO and not worth the noise.
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def create_app(config_class=Config):
@@ -16,6 +54,21 @@ def create_app(config_class=Config):
         static_url_path="/static",
     )
     app.config.from_object(config_class)
+    configure_logging(app)
+
+    # Boot banner: the handful of facts that explain most "why is production
+    # behaving differently?" questions, answerable from the log alone.
+    from app.utils.tz import local_now
+    app.logger.info(
+        "boot | db=%s | notifications=%s | line_token=%s line_group=%s | "
+        "tick_token=%s | taipei_now=%s",
+        _safe_db_identity(app.config["SQLALCHEMY_DATABASE_URI"]),
+        app.config.get("NOTIFICATION_BACKEND"),
+        "set" if app.config.get("LINE_TOKEN") else "MISSING",
+        "set" if app.config.get("LINE_GROUP_ID") else "MISSING",
+        "default-INSECURE" if app.config["TICK_TOKEN"] == "dev-tick-token-change-me" else "set",
+        local_now().isoformat(timespec="seconds"),
+    )
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -50,9 +103,42 @@ def create_app(config_class=Config):
                leave_bp, tasks_bp, timecards_bp, dashboard_bp, notifications_bp):
         app.register_blueprint(bp)
 
+    # The canonical LINE webhook is /api/line/webhook, but the LINE console has
+    # historically been pointed at /line/callback (no /api), which 404s and shows
+    # up as "webhook delivery failed" on Verify. Accept both rather than making
+    # the registered URL the one thing that must not drift.
+    from app.notifications.routes import line_webhook
+    app.add_url_rule("/line/callback", "line_callback_root", line_webhook, methods=["POST"])
+
     @app.get("/api/health")
+    @app.get("/health")
     def health():
-        return jsonify({"ok": True})
+        """Liveness, plus when /tick last actually ran.
+
+        This endpoint does NOT run the scheduled work — /api/tick does. Health
+        reports `last_tick_at` precisely so pointing the cron at the wrong URL
+        is visible instead of silent: a stale value here means nothing has been
+        opening selection windows, flagging no-shows, or advertising slots.
+        """
+        from datetime import datetime
+        from app.utils.settings import get_setting
+        from app.utils.tz import local_now
+
+        now = local_now()
+        last = get_setting("last_tick_at")
+        minutes = None
+        if last:
+            try:
+                minutes = round((now - datetime.fromisoformat(last)).total_seconds() / 60, 1)
+            except ValueError:
+                pass
+        return jsonify({
+            "ok": True,
+            "now": now.isoformat(),
+            "last_tick_at": last,
+            "minutes_since_tick": minutes,
+            "tick_healthy": minutes is not None and minutes < 30,
+        })
 
     @app.cli.command("seed-demo")
     def seed_demo_cli():

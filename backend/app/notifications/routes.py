@@ -10,9 +10,19 @@ from app.notifications.backends import LineBackend, EmailBackend
 from app.utils.decorators import tick_token_required, overseer_required
 
 
-@bp.post("/tick")
+@bp.route("/tick", methods=["GET", "POST"])
 @tick_token_required
 def tick():
+    """The external cron's entry point (CLAUDE.md #13).
+
+    GET as well as POST: it does mutate, but most free cron/uptime pingers
+    only send GET, and an endpoint the scheduler can't call is worse than a
+    verb that isn't strictly correct. It stays token-gated either way, and is
+    idempotent by design, so a stray or repeated GET is harmless.
+
+    Token: `X-Tick-Token` header, or `?token=` for pingers that can't set
+    headers.
+    """
     result = run_tick()
     return jsonify(result)
 

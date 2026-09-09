@@ -10,13 +10,16 @@ deployment's local timezone (Asia/Taipei, per SCHEMA.md) — there is a single
 tenant and no cross-timezone users, so this is simpler than threading tzinfo
 through every column. See app.utils.tz.local_now() — never datetime.utcnow().
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from flask import current_app
 
 from app.extensions import db
 from app.models import Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession, ReopenedSlot
-from app.notifications.service import notify_selection_open, notify_closing_warning, notify_no_show, notify_slot_open
+from app.notifications.service import (
+    notify_selection_open, notify_closing_warning, notify_no_show, notify_slot_open,
+    retry_failed,
+)
 from app.utils.tz import local_now
 
 
@@ -36,6 +39,9 @@ def _auto_advance_selection_windows(now):
             continue
 
         if sw.opened_applied_at is None and now >= sw.opens_at:
+            current_app.logger.info(
+                "window OPEN due | %s | opens_at=%s | month state=%s",
+                month.year_month, sw.opens_at, month.state)
             sw.opened_applied_at = now
             # Only advance a month that hasn't already moved past this point.
             # A month someone already pushed to committed shouldn't be dragged
@@ -54,6 +60,9 @@ def _auto_advance_selection_windows(now):
                 notify_closing_warning(month)
 
         if sw.closed_applied_at is None and now >= sw.closes_at:
+            current_app.logger.info(
+                "window CLOSE due | %s | closes_at=%s | month state=%s",
+                month.year_month, sw.closes_at, month.state)
             sw.closed_applied_at = now
             if month.state == "selection_open":
                 month.state = "selection_closed"
@@ -61,6 +70,27 @@ def _auto_advance_selection_windows(now):
             db.session.commit()
 
     return {"windows_opened": opened, "windows_closed": closed}
+
+
+def _start_committed_months(now):
+    """Move a committed month to running once its first day arrives.
+
+    This used to be a manual click nobody remembered, and forgetting it fails
+    silently in the worst way: everything looks normal — students sign in,
+    leave works — but no-show detection only runs on months in "running", so
+    the app's whole reason for existing is quietly off. Nothing about the
+    transition needs a human, so it doesn't ask for one."""
+    started = 0
+    for month in Month.query.filter_by(state="committed").all():
+        if not Schedule.query.filter_by(month_id=month.id, status="committed").first():
+            continue
+        year, mon = (int(x) for x in month.year_month.split("-"))
+        if now.date() >= date(year, mon, 1):
+            month.state = "running"
+            started += 1
+    if started:
+        db.session.commit()
+    return {"months_started": started}
 
 
 def _check_no_shows(now):
@@ -85,6 +115,10 @@ def _check_no_shows(now):
         .all()
     )
 
+    current_app.logger.info(
+        "no-show scan | running months=%s | assignments in window %s..%s: %d",
+        running_month_ids, lookback_date, now.date(), len(assignments))
+
     checked = 0
     for a in assignments:
         slot = a.slot
@@ -98,6 +132,12 @@ def _check_no_shows(now):
         ).first()
         if session_covers:
             continue
+        # Named here as well as in the message, so a no-show for a student who
+        # shouldn't be on the roster any more is traceable to its assignment.
+        current_app.logger.info(
+            "no-show candidate | slot %s %s:00 (id=%s) | student=%s (id=%s) | assignment=%s",
+            slot.date, slot.hour, slot.id,
+            a.student.short_name if a.student else "MISSING", a.student_id, a.id)
         notify_no_show(slot, a.student)
         checked += 1
     return {"no_show_checked": checked}
@@ -164,10 +204,49 @@ def _auto_advertise_unfilled_slots(now):
 
 
 def run_tick():
+    """Run every due check. Each stage is logged separately: a tick that does
+    nothing and a tick that half-crashed used to look identical from outside,
+    and a stage that throws shouldn't take the rest of the run down with it."""
+    from app.utils.settings import set_setting, get_setting
+    import time as _time
+
     now = local_now()
-    result = {"ran_at": now.isoformat()}
-    result.update(_auto_advance_selection_windows(now))
-    result.update(_check_no_shows(now))
-    result.update(_flag_forgotten_signouts(now))
-    result.update(_auto_advertise_unfilled_slots(now))
+    previous = get_setting("last_tick_at")
+    log = current_app.logger
+    log.info("tick START | taipei_now=%s | previous_tick=%s", now.isoformat(), previous)
+
+    result = {"ran_at": now.isoformat(), "previous_tick_at": previous}
+    # Recorded so /api/health can say when the cron last got through. A tick
+    # that silently never runs looks identical to one with nothing to do, and
+    # that is exactly how a misconfigured ping URL goes unnoticed for days.
+    set_setting("last_tick_at", now.isoformat())
+
+    stages = (
+        ("selection_windows", _auto_advance_selection_windows),
+        ("start_months", _start_committed_months),
+        ("no_shows", _check_no_shows),
+        ("forgot_signouts", _flag_forgotten_signouts),
+        ("advertise", _auto_advertise_unfilled_slots),
+        # Last: anything the stages above failed to send gets another go,
+        # including failures from previous ticks.
+        ("notify_retry", lambda _now: retry_failed()),
+    )
+    errors = {}
+    began = _time.monotonic()
+    for name, fn in stages:
+        t0 = _time.monotonic()
+        try:
+            out = fn(now)
+            result.update(out)
+            log.info("tick stage %-18s %sms | %s", name,
+                     round((_time.monotonic() - t0) * 1000), out)
+        except Exception as exc:
+            # One broken stage must not cost the other four.
+            db.session.rollback()
+            errors[name] = f"{type(exc).__name__}: {exc}"
+            log.exception("tick stage %s FAILED — continuing with the rest", name)
+
+    result["errors"] = errors
+    log.info("tick DONE in %sms | %s", round((_time.monotonic() - began) * 1000),
+             {k: v for k, v in result.items() if k not in ("ran_at", "previous_tick_at")})
     return result
