@@ -119,12 +119,18 @@ style; port this one.
 2. **Selection open** — students select **all the hours they want** (no cap). Opens
    at a configured date/time.
 3. **Selection closed** — locks at a configured date/time.
-4. **Draft generated** — the solver builds a proposed schedule (§7).
-5. **Review** — overseer edits the draft (§7).
-6. **Committed** — overseer commits → publishes and notifies.
-7. **Running** — sign-in/out, leave requests, reopened slots.
-8. **Closed** — close-out report (scheduled vs recorded per student, leave summary,
-   task completion, uncovered hours).
+4. **Review** — the solver builds a proposed draft (§7) and the month lands
+   straight here; the overseer edits it. *(There is no separate `draft` month
+   state — nothing ever read it, so it has been removed. `Schedule.status`
+   still has its own draft/committed, which is a different thing.)*
+5. **Committed** — overseer commits → publishes and notifies.
+6. **Running** — sign-in/out, leave requests, reopened slots. **Entered
+   automatically** by `/tick` once the month's first day arrives: no-show
+   detection only runs in this state, and leaving it to a manual click meant
+   that forgetting it silently disabled the app's core feature.
+7. **Closed** — close-out report (scheduled vs recorded per student, leave summary,
+   task completion, uncovered hours). Setting the state to `closed` is what
+   generates the report, which is shown in place on the admin page.
 
 Open/close dates are **config values**, not hard-coded.
 

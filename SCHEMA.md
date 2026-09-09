@@ -67,7 +67,7 @@ The `(colour, shape)` pair is unique **within a semester**, assigned colours-fir
 |---|---|---|
 | id | pk | |
 | year_month | char(7) | "2026-09" |
-| state | enum | setup / selection_open / selection_closed / draft / review / committed / running / closed |
+| state | enum | setup / selection_open / selection_closed / review / committed / running / closed — no `draft`: generating one lands straight on `review` |
 
 ### `closed_date`
 Holidays / breaks — no slots generated.

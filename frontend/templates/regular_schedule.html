@@ -59,6 +59,39 @@
     </div>
     <p class="hint" v-if="monthMessage" style="margin-bottom:10px;">[[ monthMessage ]]</p>
 
+    <div class="statusline is-shut" v-if="currentMonthState === 'committed'">
+      <strong>Starts on its own.</strong>
+      <span class="hint">Once [[ currentMonthYm ]] begins, the background job moves this to
+        running and no-show detection switches on. No need to click anything.</span>
+    </div>
+
+    <!-- Close-out: the report is the point of closing, so it's shown right here -->
+    <div class="closeout" v-if="closeout">
+      <h3>Close-out report [[ currentMonthYm ]]</h3>
+      <div class="summary" style="margin:10px 0 0;">
+        <div class="stat"><div class="k">Coverage</div><div class="v">[[ closeout.coverage_pct ]]<small>%</small></div></div>
+        <div class="stat gap"><div class="k">Uncovered</div><div class="v mono">[[ closeout.uncovered_slots.length ]]</div></div>
+        <div class="stat gap"><div class="k">No-shows</div><div class="v mono">[[ closeout.no_shows.length ]]</div></div>
+        <div class="stat gap"><div class="k">Unscheduled sign-ins</div><div class="v mono">[[ closeout.signed_in_not_scheduled.length ]]</div></div>
+      </div>
+      <table class="data" style="margin-top:10px;">
+        <thead><tr><th>Student</th><th>Scheduled</th><th>Recorded</th><th>Gap</th></tr></thead>
+        <tbody>
+          <tr v-for="row in closeout.gap" v-bind:key="row.student_id">
+            <td>[[ row.student ? (row.student.chinese_name + ' ' + row.student.english_name) : '#' + row.student_id ]]</td>
+            <td class="mono">[[ row.scheduled_hours ]]</td>
+            <td class="mono">[[ row.recorded_hours ]]</td>
+            <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="hint" style="margin-top:8px;">
+        Leave: [[ closeout.leave_patterns.too_often.length ]] student(s) over the frequent-leave threshold,
+        [[ closeout.leave_patterns.too_late.length ]] short-notice request(s).
+        <button class="secondary" style="margin-left:8px;" v-on:click="closeout = null">Dismiss</button>
+      </p>
+    </div>
+
     <h3 style="margin-top:14px;">Scheduled open / close 自動開關時間</h3>
     <p class="hint">These don't open selection themselves — they tell the background job when to
       <em>move the state for you</em>, once each. Change the state by hand at any time and it sticks;
@@ -199,24 +232,24 @@ const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const WEEKDAYS = [0, 1, 2, 3, 4];
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
-const MONTH_STATES = ["setup", "selection_open", "selection_closed", "draft",
+const MONTH_STATES = ["setup", "selection_open", "selection_closed",
                       "review", "committed", "running", "closed"];
 const MONTH_FORWARD = {
   setup: "selection_open", selection_open: "selection_closed",
-  selection_closed: "draft", draft: "review", review: "committed",
+  selection_closed: "review", review: "committed",
   committed: "running", running: "closed", closed: null,
 };
 // What each state actually gates — kept in step with the backend checks so
 // the dropdown isn't a list of opaque words.
 const STATE_HELP = {
-  setup: "Nothing is open. Set closed dates and the regular pattern here, then generate slots.",
-  selection_open: "Students can pick hours — but only while the clock is also inside the selection window below.",
-  selection_closed: "Students are locked out. This is the state the solver draws a draft from.",
-  draft: "A draft exists. Generating one moves the month straight to review.",
-  review: "You're editing the draft grid. Nothing else keys off this state.",
-  committed: "Published: the roster notification has fired and students see their shifts. Unfilled slots start being auto-advertised.",
-  running: "Same as committed, plus no-show detection. The only state you can close the month from.",
-  closed: "Finished. The close-out report is generated from here.",
+  setup: "Nothing is open to students. Set closed dates and the pattern, then build slots.",
+  selection_open: "Students can pick hours. This state alone decides that — the scheduled times below only move it for you.",
+  selection_closed: "Students are locked out. Generate the draft from the Draft page; that moves the month to review.",
+  review: "You're editing the draft grid. Commit from the Draft page when it looks right.",
+  committed: "Published — students see their shifts and the roster notification has fired. Moves to running on its own once the month starts.",
+  running: "The month is live: sign-in, leave, and no-show detection all active.",
+  closed: "Finished. Selecting this generates the close-out report below.",
+  draft: "Legacy state — nothing uses it. Move to review.",
 };
 
 const app = createApp({
@@ -229,7 +262,7 @@ const app = createApp({
       busy: false, populateMessage: "", narrow: false, monthMessage: "",
       newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
       swOpens: "", swCloses: "", genMessage: "",
-      window: null, slotCount: null,
+      window: null, slotCount: null, closeout: null,
     };
   },
   computed: {
@@ -411,15 +444,26 @@ const app = createApp({
       } finally { this.busy = false; }
     },
     async setMonthState(state) {
-      this.busy = true; this.monthMessage = "";
+      if (state === "closed" && !confirm(
+          "Close " + this.currentMonthYm + "? This produces the close-out report and ends the month.")) {
+        await this.loadMonths();  // snap the <select> back to the real state
+        return;
+      }
+      this.busy = true; this.monthMessage = ""; this.closeout = null;
       try {
         const res = await OIA.api.patch("/api/admin/months/" + this.monthId, { state });
         await this.loadMonths();
-        this.monthMessage = res.was_forward_step
-          ? "Now " + res.state + "."
-          : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
+        if (res.closeout_report) {
+          this.closeout = res.closeout_report;
+          this.monthMessage = "Month closed — close-out report below.";
+        } else {
+          this.monthMessage = res.was_forward_step
+            ? "Now " + res.state + "."
+            : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
+        }
       } catch (e) {
         this.monthMessage = e.message;
+        await this.loadMonths();
       } finally { this.busy = false; }
     },
     async addClosedDate() {

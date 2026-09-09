@@ -380,6 +380,15 @@ table.data td.row-actions { white-space: nowrap; }
 .statusline.is-open { border-left-color: var(--ok); background: #E7F0EB; }
 .statusline.is-shut { border-left-color: var(--warn); background: var(--warn-bg); }
 
+/* The month's close-out report, shown in place the moment it's produced. */
+.closeout {
+  margin-top: 14px; padding: 12px 14px;
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  border-radius: 10px; background: var(--paper);
+}
+.closeout h3 { margin-bottom: 2px; }
+.closeout .summary { border: none; padding: 0; background: none; }
+
 /* A numbered step: what it is and its state on the left, its actions right. */
 .buildstep {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;

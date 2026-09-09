@@ -8,7 +8,8 @@ from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
     RegularSlotTemplate, RegularSlot, Schedule, Assignment, Availability, ReopenedSlot,
-    SLOT_HOURS, MONTH_STATES, REGULAR_SLOT_STATES, STUDENT_ID_RE, STUDENT_ID_MAX,
+    SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
+    STUDENT_ID_RE, STUDENT_ID_MAX,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
@@ -16,6 +17,7 @@ from app.utils.periods import weekdays_in_month
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
+from app.notifications.service import reset_notification, notify_selection_open
 
 # The forward path through the cycle (CLAUDE.md #6). Used to label which move
 # is the "normal next step" in the UI — NOT to forbid anything. Going
@@ -26,8 +28,8 @@ from app.notifications.tick import run_tick
 MONTH_FORWARD = {
     "setup": "selection_open",
     "selection_open": "selection_closed",
-    "selection_closed": "draft",
-    "draft": "review",
+    "selection_closed": "review",   # generating the draft lands here directly
+    "draft": "review",              # legacy rows only
     "review": "committed",
     "committed": "running",
     "running": "closed",
@@ -198,16 +200,34 @@ def update_month_state(month_id):
     month = Month.query.get_or_404(month_id)
     data = request.get_json(force=True) or {}
     new_state = data.get("state")
-    if new_state not in MONTH_STATES:
+    if new_state not in MONTH_STATES and new_state not in LEGACY_MONTH_STATES:
         return jsonify({"error": "invalid_state", "valid": MONTH_STATES}), 400
 
     was = month.state
+    # Closing is the one move that produces something. Route it through the
+    # close-out so the report is always generated — picking "closed" from the
+    # dropdown used to just relabel the month and silently skip it.
+    report = None
+    if new_state == "closed" and was != "closed":
+        report = build_month_dashboard(month)
+
     month.state = new_state
     db.session.commit()
+
+    # Opening selection by hand used to tell nobody — only /tick's automatic
+    # path announced it, so a manual open left students with no idea the month
+    # was live. Announce on entry, clearing the previous key first so a
+    # deliberate reopen isn't deduped against the first open.
+    announced = False
+    if new_state == "selection_open" and was != "selection_open":
+        reset_notification("selection_open", "group", "month", month.id)
+        announced = notify_selection_open(month)
 
     out = month.to_dict()
     out["previous_state"] = was
     out["was_forward_step"] = (new_state == MONTH_FORWARD.get(was))
+    out["closeout_report"] = report
+    out["announced"] = announced
     return jsonify(out)
 
 
@@ -279,12 +299,24 @@ def set_selection_window(month_id):
 
     # Rescheduling re-arms the boundary: a stamp only means "this exact time
     # has already been acted on". Move the time and it's due again.
-    if sw.opens_at != new_opens:
+    opens_changed = sw.opens_at != new_opens
+    closes_changed = sw.closes_at != new_closes
+    if opens_changed:
         sw.opened_applied_at = None
-    if sw.closes_at != new_closes:
+    if closes_changed:
         sw.closed_applied_at = None
     sw.opens_at, sw.closes_at = new_opens, new_closes
     db.session.commit()
+
+    # After the commit, never before: on a brand-new window these queries would
+    # otherwise autoflush a half-built row whose opens_at is still NULL.
+    # Re-arm the announcements too, or a reopen happens silently — the
+    # notification key is per-month for all time, so a month's second open is
+    # deduped against its first.
+    if opens_changed:
+        reset_notification("selection_open", "group", "month", month_id)
+    if closes_changed:
+        reset_notification("closing_warning", "group", "month", month_id)
     return jsonify(sw.to_dict())
 
 

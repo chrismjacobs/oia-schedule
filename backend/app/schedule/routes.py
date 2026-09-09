@@ -14,8 +14,12 @@ from app.notifications.service import notify_committed
 @overseer_required
 def generate_draft(month_id):
     month = Month.query.get_or_404(month_id)
+    # "draft" is a legacy month state — generating always lands on "review",
+    # so it's still accepted as input but never produced.
     if month.state not in ("selection_closed", "draft", "review"):
-        return jsonify({"error": "wrong_month_state", "state": month.state}), 409
+        return jsonify({"error": "wrong_month_state", "state": month.state,
+                        "message": "Close selection first — a draft is built from "
+                                   "the hours students offered."}), 409
 
     weights = get_solver_weights()
     floor_hours = get_floor_hours()

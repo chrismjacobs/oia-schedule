@@ -35,10 +35,16 @@ REGULAR_SLOT_STATES = ["unavailable", "unassigned", "assigned"]
 
 REGULAR_TASK_FREQUENCIES = ["daily", "weekly", "monthly", "unlimited"]
 
+# Note: there is no month state "draft". Generating a draft moves the month
+# straight to "review", so a separate "draft" state was never read by anything
+# and only made the dropdown longer. `Schedule.status` still has its own
+# draft/committed — that one is real and unrelated.
 MONTH_STATES = [
-    "setup", "selection_open", "selection_closed", "draft",
+    "setup", "selection_open", "selection_closed",
     "review", "committed", "running", "closed",
 ]
+# Tolerated on input for any month left in the old state, never offered.
+LEGACY_MONTH_STATES = ["draft"]
 
 
 def gen_uuid():
@@ -585,6 +591,12 @@ class NotificationLog(db.Model):
     related_id = db.Column(db.Integer, nullable=True)
     sent_at = db.Column(db.DateTime, nullable=True)
     sent_flag = db.Column(db.Boolean, nullable=False, default=False)
+    # The composed text, kept so a failed send can actually be retried later.
+    # Without it an unsent row is a headstone: it records that something should
+    # have gone out and permanently blocks it being sent, because the trigger
+    # that composed the message (a window boundary, a slot's no-show moment)
+    # has already been stamped and won't fire again.
+    message = db.Column(db.Text, nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint("type", "related_type", "related_id", "target", name="uq_notification_dedup"),
