@@ -29,9 +29,20 @@ def configure_logging(app):
     in debug, which silently swallows every info-level breadcrumb — including
     everything /tick reports about what it did and why."""
     level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+
+    class TaipeiFormatter(logging.Formatter):
+        """Stamp log lines in Taipei time. The default formatter uses the
+        server's clock — UTC on Render — which puts every line 8 hours behind
+        the app's own timestamps and behind Render's log viewer, so a message
+        about a 08:15 slot appears to have been logged at 00:15."""
+
+        def formatTime(self, record, datefmt=None):
+            from app.utils.tz import local_now
+            return local_now().strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(
-        "[%(asctime)s] %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    handler.setFormatter(TaipeiFormatter(
+        "[%(asctime)s TPE] %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 
     root = logging.getLogger()
     root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]

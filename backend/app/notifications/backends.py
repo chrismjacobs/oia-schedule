@@ -84,7 +84,30 @@ class LineBackend(NotificationBackend):
         resp.raise_for_status()
 
 
+class DryRunBackend(NotificationBackend):
+    """Logs instead of sending. Used for automatic notifications whenever the
+    app is in debug, so a local run can't push to the live student group."""
+
+    def send(self, message: str, to: str = None):
+        current_app.logger.warning("[notify:DRY-RUN, not sent] %s", message)
+
+
 def get_backend() -> NotificationBackend:
+    """Backend for *automatic* notifications (/tick, commits, leave, no-shows).
+
+    Debug builds get a dry run unless ALLOW_LIVE_NOTIFICATIONS is set. The
+    credentials live in .env, so anything run locally — a test script, a
+    seeded demo month, a manual tick — otherwise pushes to the real student
+    group with the real token. That has happened: a demo seed's no-show
+    sweep sent a burst of messages naming students who'd been deleted months
+    earlier, to actual students.
+
+    The overseer's Advanced > test send builds LineBackend/EmailBackend
+    directly and is deliberately NOT routed through here, so checking the
+    wiring by hand still really sends.
+    """
+    if current_app.config.get("DEBUG") and not current_app.config.get("ALLOW_LIVE_NOTIFICATIONS"):
+        return DryRunBackend()
     backend = current_app.config.get("NOTIFICATION_BACKEND", "email")
     if backend == "line":
         return LineBackend()

@@ -85,6 +85,10 @@ class Config:
     # Notification backend: "email" (v1 default) or "line" (CLAUDE.md #12).
     # LINE Messaging API (not LINE Notify — discontinued March 2025).
     NOTIFICATION_BACKEND = os.environ.get("NOTIFICATION_BACKEND", "email")
+    # Debug runs dry-run automatic notifications so local testing cannot push
+    # to the live student group using the .env credentials. Set to 1 only when
+    # you genuinely want a local run to send for real.
+    ALLOW_LIVE_NOTIFICATIONS = _bool("ALLOW_LIVE_NOTIFICATIONS", False)
     LINE_CHANNEL = os.environ.get("LINE_CHANNEL")            # channel ID
     LINE_SECRET = os.environ.get("LINE_SECRET")              # channel secret (webhook signature verification)
     LINE_TOKEN = os.environ.get("LINE_TOKEN")                # channel access token (push messages)
