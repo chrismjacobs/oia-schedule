@@ -34,9 +34,12 @@ def notify_once(type_, target, related_type, related_id, message):
         current_app.logger.info("notify RETRY (previous attempt failed) | %s", key)
         row.message = message
 
-    current_app.logger.info("notify SEND | %s | %r", key, message)
+    backend = get_backend()
+    # via=<backend> on every line: "which channel did this actually go out
+    # on?" is the first question whenever a message doesn't arrive.
+    current_app.logger.info("notify SEND via=%s | %s | %r", backend.name, key, message)
     try:
-        get_backend().send(message)
+        backend.send(message)
     except Exception:
         # Swallowed, not re-raised. The row stays unsent, so the next /tick
         # retries it — that's the self-healing CLAUDE.md #13 asks for. Raising
@@ -44,14 +47,14 @@ def notify_once(type_, target, related_type, related_id, message):
         # (no-show checks, forgot-signout flags and auto-advertising never ran)
         # and 500'd whatever request triggered it, including a student simply
         # filing a leave request.
-        current_app.logger.exception("notify FAIL (will retry next tick) | %s", key)
+        current_app.logger.exception("notify FAIL via=%s (will retry next tick) | %s", backend.name, key)
         db.session.commit()
         return False
 
     row.sent_at = local_now()
     row.sent_flag = True
     db.session.commit()
-    current_app.logger.info("notify OK | %s", key)
+    current_app.logger.info("notify OK via=%s | %s", backend.name, key)
     return True
 
 

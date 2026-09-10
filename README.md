@@ -126,7 +126,12 @@ ID), `LINE_SECRET` (webhook signature verification — not yet used since there'
 no inbound webhook route), and `LINE_GROUP_ID` once the bot's been added to
 the student group. Until `LINE_GROUP_ID` is set, use **Setup → Notification
 test send** with an explicit target user/group ID to check the wiring.
-Nothing configured just logs the message instead of sending.
+If the selected backend isn't configured, the send is logged as an error and
+left unsent (retried each `/tick`) — it is never recorded as delivered.
+**Advanced → Notification diagnostics** shows which backend automatic
+notifications actually use and asks LINE's API what it has received (token,
+group membership, monthly usage, daily push counts); each check is also logged
+as `LINE diag`.
 
 ## Project layout
 

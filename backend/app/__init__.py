@@ -89,6 +89,14 @@ def create_app(config_class=Config):
             "Automatic notifications are DRY-RUN because the database is SQLite. "
             "Set ALLOW_LIVE_NOTIFICATIONS=1 to send for real. "
             "Advanced > test send is unaffected and always sends.")
+    else:
+        from app.notifications.backends import delivery_problem
+        problem = delivery_problem(app.config)
+        if problem:
+            app.logger.error(
+                "Automatic notifications will NOT be delivered: %s. "
+                "Advanced > test send may still work, because it picks its own backend.",
+                problem)
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -152,7 +160,7 @@ def create_app(config_class=Config):
                 minutes = round((now - datetime.fromisoformat(last)).total_seconds() / 60, 1)
             except ValueError:
                 pass
-        from app.notifications.backends import automatic_notifications_are_live
+        from app.notifications.backends import automatic_notifications_are_live, delivery_problem
         from app.utils.settings import get_attendance_notify_enabled
         return jsonify({
             "ok": True,
@@ -163,6 +171,7 @@ def create_app(config_class=Config):
             # The two switches that make notifications vanish without erroring.
             "notifications_live": automatic_notifications_are_live(app.config),
             "notification_backend": app.config.get("NOTIFICATION_BACKEND"),
+            "notification_problem": delivery_problem(app.config),
             "signin_notifications_enabled": get_attendance_notify_enabled(),
         })
 

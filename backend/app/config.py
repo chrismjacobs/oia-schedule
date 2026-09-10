@@ -84,7 +84,9 @@ class Config:
 
     # Notification backend: "email" (v1 default) or "line" (CLAUDE.md #12).
     # LINE Messaging API (not LINE Notify — discontinued March 2025).
-    NOTIFICATION_BACKEND = os.environ.get("NOTIFICATION_BACKEND", "email")
+    # Normalised: "LINE", "line " or a blank value on Render would otherwise
+    # all silently fall through to email.
+    NOTIFICATION_BACKEND = (os.environ.get("NOTIFICATION_BACKEND") or "email").strip().lower()
     # Debug runs dry-run automatic notifications so local testing cannot push
     # to the live student group using the .env credentials. Set to 1 only when
     # you genuinely want a local run to send for real.

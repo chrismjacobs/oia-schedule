@@ -58,8 +58,52 @@
   </div>
 
   <div class="panel">
+    <h2>Notification diagnostics 通知診斷</h2>
+    <p class="hint">Why didn't a message arrive? Shows which channel automatic notifications really use,
+      asks LINE what it has received (read-only — sends nothing, uses no quota), and lists the latest
+      notifications the app attempted. Every LINE check is also written to the server log as <span class="mono">LINE diag</span>.</p>
+    <button v-bind:disabled="busy" v-on:click="runDiagnostics">Run diagnostics</button>
+    <p class="error-text" v-if="diagError">[[ diagError ]]</p>
+    <template v-if="diag">
+      <div class="statusline" style="margin-top:10px;" v-bind:class="diag.automatic_problem ? 'is-shut' : 'is-open'">
+        <strong>Automatic notifications go via: <span class="mono">[[ diag.automatic_backend ]]</span></strong>
+        <span v-if="diag.automatic_problem">— [[ diag.automatic_problem ]]</span>
+        <span v-else>— configured and live.</span>
+      </div>
+      <p class="hint" v-if="!diag.line_token_set">LINE_TOKEN is not set, so LINE can't be checked.</p>
+      <div class="table-scroll" v-if="diag.checks.length" style="margin-top:10px;">
+        <table class="data">
+          <thead><tr><th>LINE check</th><th>Result</th><th>Detail</th><th>Request ID</th></tr></thead>
+          <tbody>
+            <tr v-for="c in diag.checks" v-bind:key="c.label">
+              <td>[[ c.label ]]</td>
+              <td><span class="badge" v-bind:class="c.ok ? 'ok' : 'warn'">[[ c.status || 'no response' ]]</span></td>
+              <td class="mono" style="white-space:pre-wrap; word-break:break-word;">[[ JSON.stringify(c.ok ? c.data : c.error) ]]</td>
+              <td class="mono">[[ c.request_id || '' ]]</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-scroll" v-if="diag.recent.length" style="margin-top:10px;">
+        <table class="data">
+          <thead><tr><th>Recent notification</th><th>Sent</th><th>Message</th></tr></thead>
+          <tbody>
+            <tr v-for="r in diag.recent" v-bind:key="r.id">
+              <td class="mono">[[ r.key ]]</td>
+              <td><span class="badge" v-bind:class="r.sent ? 'ok' : 'warn'">[[ r.sent ? r.sent_at : 'unsent — retrying' ]]</span></td>
+              <td>[[ r.message ]]</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </div>
+
+  <div class="panel">
     <h2>Notification test send 通知測試</h2>
-    <p class="hint">Send a one-off message to check LINE/email wiring before relying on it live.</p>
+    <p class="hint">Send a one-off message to check LINE/email wiring before relying on it live.
+      This uses the backend picked below, not the one automatic notifications use — so a test that
+      arrives doesn't prove automatic ones will. Run diagnostics above to see that.</p>
     <div class="field-row">
       <div class="field"><label>Backend</label>
         <select v-model="testBackend">
@@ -96,6 +140,7 @@ const app = createApp({
       busy: false, demoMessage: "",
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
       tickResult: "",
+      diag: null, diagError: "",
     };
   },
   async mounted() {
@@ -136,10 +181,18 @@ const app = createApp({
     async sendTest() {
       this.busy = true; this.testMessage2 = "";
       try {
-        await OIA.api.post("/api/test-send", { backend: this.testBackend, target: this.testTarget, message: this.testMessage });
-        this.testMessage2 = "Sent (or logged, if not configured yet).";
+        const res = await OIA.api.post("/api/test-send", { backend: this.testBackend, target: this.testTarget, message: this.testMessage });
+        this.testMessage2 = "Sent via " + res.backend + ".";
       } catch (e) {
         this.testMessage2 = e.message;
+      } finally { this.busy = false; }
+    },
+    async runDiagnostics() {
+      this.busy = true; this.diagError = "";
+      try {
+        this.diag = await OIA.api.get("/api/notify-diagnostics");
+      } catch (e) {
+        this.diagError = e.message;
       } finally { this.busy = false; }
     },
     async runTick() {

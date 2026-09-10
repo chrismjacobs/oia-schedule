@@ -6,7 +6,8 @@ from flask import jsonify, request, current_app
 
 from app.notifications import bp
 from app.notifications.tick import run_tick
-from app.notifications.backends import LineBackend, EmailBackend
+from app.models import NotificationLog
+from app.notifications.backends import LineBackend, EmailBackend, line_diagnostics
 from app.utils.decorators import tick_token_required, overseer_required
 
 
@@ -84,3 +85,22 @@ def test_send():
         return jsonify({"error": "send_failed", "message": str(e)}), 502
 
     return jsonify({"ok": True, "backend": backend_name})
+
+
+@bp.get("/notify-diagnostics")
+@overseer_required
+def notify_diagnostics():
+    """Everything needed to answer "why didn't that reach LINE?" in one
+    place: which backend automatic notifications really use, read-only checks
+    against LINE's API (token, group membership, quota usage, delivery
+    counts), and the most recent notification_log rows."""
+    report = line_diagnostics()
+    rows = NotificationLog.query.order_by(NotificationLog.id.desc()).limit(15).all()
+    report["recent"] = [{
+        "id": r.id,
+        "key": f"{r.type} {r.related_type}:{r.related_id} -> {r.target}",
+        "sent": r.sent_flag,
+        "sent_at": r.sent_at.isoformat(timespec="seconds") if r.sent_at else None,
+        "message": r.message,
+    } for r in rows]
+    return jsonify(report)

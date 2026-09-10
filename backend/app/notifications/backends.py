@@ -3,6 +3,7 @@ LINE Messaging API switches on once the Official Account is set up. Never
 LINE Notify — discontinued March 2025."""
 import smtplib
 import time
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
 import requests
@@ -10,17 +11,31 @@ from flask import current_app
 
 
 class NotificationBackend:
+    name = "?"
+
     def send(self, message: str):
         raise NotImplementedError
 
 
 class EmailBackend(NotificationBackend):
+    name = "email"
+
     def send(self, message: str):
         cfg = current_app.config
         to_addr = cfg.get("NOTIFICATION_TO_EMAIL")
         if not to_addr or not cfg.get("SMTP_HOST"):
-            current_app.logger.info("[notify:email:noop, not configured] %s", message)
-            return
+            # Raise, like LINE does. This used to log at info and return, so
+            # the caller marked the notification sent — a slot got advertised,
+            # the log said "notify OK", and nothing reached anyone. That is
+            # exactly what happens when NOTIFICATION_BACKEND is left at its
+            # email default on a deployment that only has LINE set up.
+            current_app.logger.error(
+                "EMAIL send SKIPPED — %s not configured. Message dropped: %r "
+                "(automatic notifications use NOTIFICATION_BACKEND=%s; set it to "
+                "'line' to send via LINE)",
+                "NOTIFICATION_TO_EMAIL" if not to_addr else "SMTP_HOST", message,
+                cfg.get("NOTIFICATION_BACKEND"))
+            raise RuntimeError("email_not_configured")
         msg = MIMEText(message, "plain", "utf-8")
         msg["Subject"] = "OIA Duty Roster"
         msg["From"] = cfg["NOTIFICATION_FROM_EMAIL"]
@@ -34,6 +49,7 @@ class EmailBackend(NotificationBackend):
 
 class LineBackend(NotificationBackend):
     """LINE Messaging API push to the student group (not LINE Notify)."""
+    name = "line"
     PUSH_URL = "https://api.line.me/v2/bot/message/push"
     REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 
@@ -87,6 +103,7 @@ class LineBackend(NotificationBackend):
 class DryRunBackend(NotificationBackend):
     """Logs instead of sending. Used for automatic notifications whenever the
     app is in debug, so a local run can't push to the live student group."""
+    name = "dry-run"
 
     def send(self, message: str, to: str = None):
         current_app.logger.warning("[notify:DRY-RUN, not sent] %s", message)
@@ -127,3 +144,76 @@ def get_backend() -> NotificationBackend:
     if backend == "line":
         return LineBackend()
     return EmailBackend()
+
+
+def delivery_problem(config):
+    """Why automatic notifications won't reach anyone, or None if they should.
+
+    Test send picks its backend from a dropdown (default LINE); automatic
+    notifications use NOTIFICATION_BACKEND. When those disagree, test sends
+    arrive and real ones don't, which looks like a LINE fault but isn't."""
+    if not automatic_notifications_are_live(config):
+        return "DRY-RUN: database is SQLite, so nothing is sent (ALLOW_LIVE_NOTIFICATIONS=1 overrides)"
+    backend = config.get("NOTIFICATION_BACKEND", "email")
+    needed = ("LINE_TOKEN", "LINE_GROUP_ID") if backend == "line" else ("SMTP_HOST", "NOTIFICATION_TO_EMAIL")
+    missing = [k for k in needed if not config.get(k)]
+    if missing:
+        return f"NOTIFICATION_BACKEND={backend} but {', '.join(missing)} not set"
+    return None
+
+
+LINE_API = "https://api.line.me/v2/bot"
+
+
+def _line_get(label, path, token):
+    try:
+        resp = requests.get(LINE_API + path, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+    except requests.RequestException as e:
+        current_app.logger.error("LINE diag | %s | request failed: %s", label, e)
+        return {"label": label, "ok": False, "status": None, "error": str(e)}
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text[:300]
+    request_id = resp.headers.get("x-line-request-id")
+    log = current_app.logger.info if resp.ok else current_app.logger.error
+    log("LINE diag | %s | %s | request_id=%s | %s", label, resp.status_code, request_id, body)
+    return {"label": label, "ok": resp.ok, "status": resp.status_code,
+            "request_id": request_id, ("data" if resp.ok else "error"): body}
+
+
+def line_diagnostics():
+    """Ask LINE's side what it knows, since its console has no per-message
+    log for pushes. Read-only: sends nothing and uses no quota.
+
+    The most telling check is quota consumption — it counts pushes LINE
+    actually accepted this month, so if advertising a slot doesn't move it,
+    the app never reached LINE at all."""
+    cfg = current_app.config
+    token = cfg.get("LINE_TOKEN")
+    group = cfg.get("LINE_GROUP_ID")
+    report = {
+        "automatic_backend": cfg.get("NOTIFICATION_BACKEND"),
+        "automatic_live": automatic_notifications_are_live(cfg),
+        "automatic_problem": delivery_problem(cfg),
+        "line_token_set": bool(token),
+        "line_group_id": group,
+        "checks": [],
+    }
+    if not token:
+        return report
+
+    checks = report["checks"]
+    checks.append(_line_get("Token valid (bot info)", "/info", token))
+    if group:
+        checks.append(_line_get("Bot is a member of LINE_GROUP_ID", f"/group/{group}/summary", token))
+        checks.append(_line_get("Group member count", f"/group/{group}/members/count", token))
+    checks.append(_line_get("Monthly message quota", "/message/quota", token))
+    checks.append(_line_get("Messages used this month", "/message/quota/consumption", token))
+    # LINE buckets delivery stats by Japan date and fills them in with a lag,
+    # so today usually reads "unready"; yesterday is the reliable one.
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    for d in (today, today - timedelta(days=1)):
+        checks.append(_line_get(f"Pushes delivered {d.isoformat()} (JST)",
+                                f"/message/delivery/push?date={d.strftime('%Y%m%d')}", token))
+    return report
