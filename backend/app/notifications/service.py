@@ -147,7 +147,12 @@ def notify_signed_in(session):
     """Toggle-gated (Advanced > sign-in/out notifications) since this can
     fire a lot on a busy day — every sign-in, not just once."""
     if not get_attendance_notify_enabled():
-        return
+        # Said out loud: this is one of the two ways a notification vanishes
+        # without any error, and it looks identical to a broken integration.
+        current_app.logger.info(
+            "notify OFF (Advanced > sign-in/out notifications is unticked) | "
+            "signed_in attendance_session:%s", session.id)
+        return False
     return notify_once(
         "signed_in", "group", "attendance_session", session.id,
         f"[OIA] {session.student.short_name} signed in.",
@@ -156,7 +161,10 @@ def notify_signed_in(session):
 
 def notify_signed_out(session):
     if not get_attendance_notify_enabled():
-        return
+        current_app.logger.info(
+            "notify OFF (Advanced > sign-in/out notifications is unticked) | "
+            "signed_out attendance_session:%s", session.id)
+        return False
     return notify_once(
         "signed_out", "group", "attendance_session", session.id,
         f"[OIA] {session.student.short_name} signed out.",

@@ -207,10 +207,18 @@ def sign_in():
         return jsonify({"error": "students_only"}), 403
     today_date = local_today()
 
+    # Every outcome is logged: a sign-in that never records looks exactly like
+    # a broken notification, and until now the difference was invisible.
+    current_app.logger.info(
+        "sign-in attempt | student=%s | date=%s", current_user.student_id, today_date)
+
     existing = AttendanceSession.query.filter_by(
         student_id=current_user.student_id, date=today_date, signed_out_at=None
     ).first()
     if existing:
+        current_app.logger.info(
+            "sign-in REFUSED session_already_open | student=%s | session #%s open since %s",
+            current_user.student_id, existing.id, existing.signed_in_at)
         return jsonify({"error": "session_already_open", "session": existing.to_dict()}), 409
 
     assignments = _todays_assignments(current_user.student_id, today_date)
@@ -221,6 +229,9 @@ def sign_in():
     if assignments:
         covered = _covered_slot_ids(current_user.student_id, today_date)
         if all(a.slot_id in covered for a in assignments):
+            current_app.logger.info(
+                "sign-in REFUSED all_scheduled_hours_reported | student=%s | %d assignment(s) all covered",
+                current_user.student_id, len(assignments))
             return jsonify({"error": "all_scheduled_hours_reported",
                              "message": "You've already reported all your scheduled hours today."}), 409
 
@@ -232,6 +243,10 @@ def sign_in():
         session.flag_reason = "not_scheduled"
     db.session.add(session)
     db.session.commit()
+    current_app.logger.info(
+        "sign-in OK | student=%s | session #%s at %s | scheduled hours today=%d%s",
+        current_user.student_id, session.id, now, len(assignments),
+        " (FLAGGED not_scheduled)" if not assignments else "")
     notify_signed_in(session)
     return jsonify(session.to_dict()), 201
 

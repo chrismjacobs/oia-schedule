@@ -92,21 +92,36 @@ class DryRunBackend(NotificationBackend):
         current_app.logger.warning("[notify:DRY-RUN, not sent] %s", message)
 
 
+def automatic_notifications_are_live(config) -> bool:
+    """Whether automatic notifications really send.
+
+    The hazard is running against a *throwaway database* while holding the
+    production credentials from .env — a test script, a seeded demo month, a
+    manual tick. That has happened: a demo seed's no-show sweep pushed a burst
+    of messages naming long-deleted students to actual students.
+
+    So the signal is the database, not the debug flag. Every scratch/test run
+    uses SQLite; this deployment is Postgres. Keying on DEBUG was wrong — this
+    project ships FLASK_DEBUG=1 in .env to relax the session cookie for local
+    http, so it is set in production too, and using it silenced every real
+    notification while test-send kept working.
+
+    ALLOW_LIVE_NOTIFICATIONS=1 forces live sending — needed if this is ever
+    deployed on SQLite for real (CLAUDE.md #3 keeps that option open).
+    """
+    if config.get("ALLOW_LIVE_NOTIFICATIONS"):
+        return True
+    return not str(config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite")
+
+
 def get_backend() -> NotificationBackend:
     """Backend for *automatic* notifications (/tick, commits, leave, no-shows).
 
-    Debug builds get a dry run unless ALLOW_LIVE_NOTIFICATIONS is set. The
-    credentials live in .env, so anything run locally — a test script, a
-    seeded demo month, a manual tick — otherwise pushes to the real student
-    group with the real token. That has happened: a demo seed's no-show
-    sweep sent a burst of messages naming students who'd been deleted months
-    earlier, to actual students.
-
     The overseer's Advanced > test send builds LineBackend/EmailBackend
     directly and is deliberately NOT routed through here, so checking the
-    wiring by hand still really sends.
+    wiring by hand always really sends.
     """
-    if current_app.config.get("DEBUG") and not current_app.config.get("ALLOW_LIVE_NOTIFICATIONS"):
+    if not automatic_notifications_are_live(current_app.config):
         return DryRunBackend()
     backend = current_app.config.get("NOTIFICATION_BACKEND", "email")
     if backend == "line":

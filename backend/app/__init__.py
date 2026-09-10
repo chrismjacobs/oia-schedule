@@ -70,16 +70,25 @@ def create_app(config_class=Config):
     # Boot banner: the handful of facts that explain most "why is production
     # behaving differently?" questions, answerable from the log alone.
     from app.utils.tz import local_now
+    from app.notifications.backends import automatic_notifications_are_live
+    live = automatic_notifications_are_live(app.config)
     app.logger.info(
-        "boot | db=%s | notifications=%s | line_token=%s line_group=%s | "
-        "tick_token=%s | taipei_now=%s",
+        "boot | db=%s | notifications=%s | AUTOMATIC NOTIFICATIONS: %s | "
+        "line_token=%s line_group=%s | tick_token=%s | debug=%s | taipei_now=%s",
         _safe_db_identity(app.config["SQLALCHEMY_DATABASE_URI"]),
         app.config.get("NOTIFICATION_BACKEND"),
+        "LIVE" if live else "DRY-RUN (nothing will be sent)",
         "set" if app.config.get("LINE_TOKEN") else "MISSING",
         "set" if app.config.get("LINE_GROUP_ID") else "MISSING",
         "default-INSECURE" if app.config["TICK_TOKEN"] == "dev-tick-token-change-me" else "set",
+        app.config.get("DEBUG"),
         local_now().isoformat(timespec="seconds"),
     )
+    if not live:
+        app.logger.warning(
+            "Automatic notifications are DRY-RUN because the database is SQLite. "
+            "Set ALLOW_LIVE_NOTIFICATIONS=1 to send for real. "
+            "Advanced > test send is unaffected and always sends.")
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -143,12 +152,18 @@ def create_app(config_class=Config):
                 minutes = round((now - datetime.fromisoformat(last)).total_seconds() / 60, 1)
             except ValueError:
                 pass
+        from app.notifications.backends import automatic_notifications_are_live
+        from app.utils.settings import get_attendance_notify_enabled
         return jsonify({
             "ok": True,
             "now": now.isoformat(),
             "last_tick_at": last,
             "minutes_since_tick": minutes,
             "tick_healthy": minutes is not None and minutes < 30,
+            # The two switches that make notifications vanish without erroring.
+            "notifications_live": automatic_notifications_are_live(app.config),
+            "notification_backend": app.config.get("NOTIFICATION_BACKEND"),
+            "signin_notifications_enabled": get_attendance_notify_enabled(),
         })
 
     @app.cli.command("seed-demo")
