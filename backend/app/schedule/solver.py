@@ -1,31 +1,42 @@
-"""OR-Tools CP-SAT allocator (CLAUDE.md #6). Deterministic, auditable,
+"""OR-Tools CP-SAT allocator (CLAUDE.md #7). Deterministic, auditable,
 config-driven. No LLM involved in allocation, ever.
 
+It schedules sessions, not hours. A session is one student on one unbroken
+run of hours inside a morning or an afternoon (never across lunch), between
+the configured minimum and maximum length (2-4h by default). For every
+student and half-day, every run they fully offered is a candidate; the
+solver picks sessions, and a student's hours are simply the hours of the
+sessions they were given. Deciding hour by hour, as this used to, let the
+floor and equalising terms carve one morning into four single hours for four
+different people — sessions make the shift the unit, which is also how
+sign-in already works (one sign-in per run).
+
 Hard constraints: at most one student per slot; never assign an hour a
-student didn't offer. (No-double-booking and closed-date exclusion fall out
-for free: slots are unique per date+hour, and closed dates never get slots.)
+student didn't offer (candidates are built only from offered hours); at most
+one session per student per half-day. Closed dates and unavailable hours
+have no slots, so they can't be scheduled.
 
-Pre-pass, before CP-SAT runs: standing regular-slot claims (`RegularSlot`,
-state=assigned) are locked in first, but only for a student who actually
-offered that hour this month — see `_load_regular_locks`. If they didn't
-offer it, the hour is just a normal contested slot for whoever did. This is
-a lock, not a solver weight: predictable and auditable rather than a
-tunable that might get out-argued by the objective.
+Regular hours (`RegularSlot`, state=assigned) are honoured only if the
+student offered that hour this month. They're a near-absolute bonus rather
+than a carve-out, so the student's session is built around them — a regular
+8-10 can grow into 8-12 if they offered it — and an odd combination of
+regular hours can't make the whole month unsolvable.
 
-Soft preferences, in priority order (encoded as weighted objective terms so
-higher-priority terms use larger weights and dominate lower ones):
-  1. coverage        - maximise filled slots
-  2. floor_guarantee  - everyone who offered enough hours gets >= floor before
-                        anyone gets extra
-  3. contiguity       - reward adjacent same-student hours (~2h blocks)
-  4. low_churn        - reward repeating the same weekday/hour across
-                        consecutive weeks (this is what makes a 2-on/2-off
-                        rotation emerge on its own; never scripted directly)
-  5. equalise_hours   - minimise the spread between the most- and
-                        least-scheduled student
+Soft preferences, in priority order (weights in config.SOLVER_WEIGHTS, each
+large enough to dominate everything below it):
+  1. coverage         - fill as many hours as possible
+  2. floor_guarantee  - everyone who offered enough gets >= floor hours
+                        before anyone gets extra
+  3. short_session    - a session under the minimum is a last resort, used
+                        only to cover an hour nobody else can
+  4. per_session      - fewer, longer sessions over the same hours
+  5. same_day_double  - avoid giving one student both halves of a day
+  6. low_churn        - repeat the same weekday/hour across consecutive weeks
+                        (lets a 2-on/2-off rotation emerge on its own)
+  7. equalise_hours   - narrow the gap between most and least scheduled
 
-If CP-SAT can't produce a feasible solution in the time budget, fall back to
-a greedy round-robin (CLAUDE.md #6: "acceptable and fully explainable").
+If CP-SAT can't produce a solution in the time budget, a session-aware
+greedy round-robin takes over (CLAUDE.md #7: acceptable and explainable).
 """
 from collections import defaultdict
 
@@ -33,215 +44,283 @@ from ortools.sat.python import cp_model
 
 from app.models import Slot, Availability, RegularSlot
 
+# Honouring a regular hour outranks everything else; kept out of the tunable
+# weights on purpose — it's a standing arrangement, not a preference.
+REGULAR_LOCK_FACTOR = 10
+
 
 def _load_inputs(month_id):
     slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
-    avail_rows = (
-        Availability.query.join(Slot, Availability.slot_id == Slot.id)
-        .filter(Slot.month_id == month_id)
-        .all()
-    )
-    by_slot = defaultdict(list)  # slot_id -> [student_id]
-    by_student = defaultdict(list)  # student_id -> [slot_id]
-    for a in avail_rows:
-        by_slot[a.slot_id].append(a.student_id)
-        by_student[a.student_id].append(a.slot_id)
-    return slots, by_slot, by_student
+    offered = defaultdict(set)  # student_id -> {slot_id}
+    for a in (Availability.query.join(Slot, Availability.slot_id == Slot.id)
+              .filter(Slot.month_id == month_id).all()):
+        offered[a.student_id].add(a.slot_id)
+    return slots, offered
 
 
-def _load_regular_locks(month_id, by_slot, slots):
-    """Standing regular-slot claims: a student with a regular_slot 'assigned'
-    to them this month is locked in before the solver runs — but only if they
-    actually offered that hour (never assign an hour a student didn't select).
-    If they didn't select it, it stays a normal contested slot for whoever
-    did — no special treatment beyond this lock."""
+def _load_regular_locks(month_id, slots, offered):
+    """{slot_id: student_id} for regular hours the student actually offered
+    this month (never assign an hour a student didn't select)."""
     slot_id_by_date_hour = {(s.date, s.hour): s.id for s in slots}
     locked = {}
-    regular_rows = RegularSlot.query.filter_by(month_id=month_id, state="assigned").all()
-    for r in regular_rows:
-        if r.student_id is None:
-            continue
+    for r in RegularSlot.query.filter_by(month_id=month_id, state="assigned").all():
         slot_id = slot_id_by_date_hour.get((r.date, r.hour))
-        if slot_id is None or slot_id not in by_slot:
-            continue
-        if r.student_id not in by_slot[slot_id]:
-            continue
-        locked[slot_id] = r.student_id
+        if r.student_id and slot_id and slot_id in offered.get(r.student_id, ()):
+            locked[slot_id] = r.student_id
     return locked
 
 
-def solve_month(month_id, weights, floor_hours, time_limit_seconds=20):
-    """Returns {slot_id: student_id} for the best assignment found, plus a
-    dict of solver metadata for the audit trail."""
-    slots, by_slot, by_student = _load_inputs(month_id)
+def _half_days(slots):
+    """{(date, period): [slots in hour order]} — the windows a session lives in."""
+    out = defaultdict(list)
+    for s in slots:
+        out[(s.date, s.period)].append(s)
+    for v in out.values():
+        v.sort(key=lambda s: s.hour)
+    return out
 
-    locked = _load_regular_locks(month_id, by_slot, slots)
-    if locked:
-        # Strip locked slots from every student's offer list, not just the
-        # locked student's — otherwise CP-SAT still creates a free variable
-        # for some other student on that slot (no "at most one" constraint
-        # applies to it once it's out of by_slot) and can happily overwrite
-        # the lock in the final merge.
-        locked_slot_ids = set(locked.keys())
-        for slot_id in locked_slot_ids:
-            by_slot.pop(slot_id, None)
-        for student_id in list(by_student.keys()):
-            remaining = [sid for sid in by_student[student_id] if sid not in locked_slot_ids]
-            if remaining:
-                by_student[student_id] = remaining
-            else:
-                del by_student[student_id]
 
-    if not by_student:
-        meta = {
-            "status": "REGULAR_ONLY" if locked else "NO_AVAILABILITY",
-            "assigned": len(locked), "total_slots": len(slots), "regular_locked": len(locked),
-        }
-        return dict(locked), meta
+def _candidate_sessions(slots, offered, rules):
+    """Every session a student could be given: (student_id, half_day_key,
+    [slot_ids]) for each unbroken run of hours they offered within a
+    half-day, from 1 (if short sessions are allowed) up to max_hours."""
+    shortest = 1 if rules["short_as_last_resort"] else rules["min_hours"]
+    longest = rules["max_hours"]
+    out = []
+    for key, day_slots in _half_days(slots).items():
+        for student_id, mine in offered.items():
+            # Split the half-day into the student's maximal offered runs of
+            # consecutive hours (a missing slot or an unoffered hour breaks it).
+            runs, cur = [], []
+            for s in day_slots:
+                if s.id in mine and cur and s.hour == cur[-1].hour + 1:
+                    cur.append(s)
+                else:
+                    if cur:
+                        runs.append(cur)
+                    cur = [s] if s.id in mine else []
+            if cur:
+                runs.append(cur)
+            for run in runs:
+                for length in range(shortest, min(longest, len(run)) + 1):
+                    for start in range(len(run) - length + 1):
+                        out.append((student_id, key, [s.id for s in run[start:start + length]]))
+    return out
+
+
+def solve_month(month_id, weights, floor_hours, rules=None, time_limit_seconds=20):
+    """Returns ({slot_id: student_id}, meta) for the best schedule found."""
+    if rules is None:
+        from app.utils.settings import get_session_rules
+        rules = get_session_rules()
+
+    slots, offered = _load_inputs(month_id)
+    locked = _load_regular_locks(month_id, slots, offered)
+    base_meta = {"total_slots": len(slots), "session_rules": rules}
+
+    if not offered:
+        return {}, dict(base_meta, status="NO_AVAILABILITY", assigned=0, regular_locked=0,
+                        regular_locked_slot_ids=[])
 
     slot_by_id = {s.id: s for s in slots}
-    students = list(by_student.keys())
+    students = sorted(offered)
+    candidates = _candidate_sessions(slots, offered, rules)
 
     model = cp_model.CpModel()
+    z = [model.NewBoolVar(f"sess_{i}") for i in range(len(candidates))]
 
-    # x[(student, slot)] only exists where the student actually offered the slot.
-    x = {}
-    for student_id, slot_ids in by_student.items():
+    # x[(student, slot)]: the student works that hour — 1 exactly when one of
+    # their chosen sessions covers it.
+    covering = defaultdict(list)            # (student, slot) -> [z]
+    per_half_day = defaultdict(list)        # (student, date, period) -> [z]
+    for var, (student_id, (d, period), slot_ids) in zip(z, candidates):
+        per_half_day[(student_id, d, period)].append(var)
         for slot_id in slot_ids:
-            x[(student_id, slot_id)] = model.NewBoolVar(f"x_s{student_id}_sl{slot_id}")
+            covering[(student_id, slot_id)].append(var)
+
+    # Hard: at most one session per student per half-day. That also makes a
+    # student's sessions disjoint, so each x below is 0 or 1.
+    for vars_ in per_half_day.values():
+        model.AddAtMostOne(vars_)
+
+    x = {}
+    for (student_id, slot_id), vars_ in covering.items():
+        v = model.NewBoolVar(f"x_s{student_id}_sl{slot_id}")
+        model.Add(v == sum(vars_))
+        x[(student_id, slot_id)] = v
 
     # Hard: at most one student per slot.
-    for slot_id, student_ids in by_slot.items():
-        model.Add(sum(x[(sid, slot_id)] for sid in student_ids) <= 1)
+    by_slot = defaultdict(list)
+    for (student_id, slot_id), v in x.items():
+        by_slot[slot_id].append(v)
+    for vars_ in by_slot.values():
+        model.AddAtMostOne(vars_)
 
-    objective_terms = []
+    terms = []
+
+    # Regular hours — see REGULAR_LOCK_FACTOR.
+    lock_vars = [x[(sid, slot_id)] for slot_id, sid in locked.items() if (sid, slot_id) in x]
+    if lock_vars:
+        terms.append(REGULAR_LOCK_FACTOR * weights["coverage"] * sum(lock_vars))
 
     # 1. Coverage
-    coverage_terms = list(x.values())
-    if coverage_terms:
-        objective_terms.append(weights["coverage"] * sum(coverage_terms))
+    terms.append(weights["coverage"] * sum(x.values()))
 
-    # Per-student assigned-hours variable (used by floor + equalise).
-    max_possible = max((len(v) for v in by_student.values()), default=0)
-    assigned_hours = {}
+    # Hours per student (floor + equalise).
+    hours = {}
     for student_id in students:
-        var = model.NewIntVar(0, max_possible, f"hours_s{student_id}")
-        model.Add(var == sum(x[(student_id, sid)] for sid in by_student[student_id]))
-        assigned_hours[student_id] = var
+        mine = [v for (sid, _), v in x.items() if sid == student_id]
+        h = model.NewIntVar(0, len(offered[student_id]), f"hours_s{student_id}")
+        model.Add(h == sum(mine))
+        hours[student_id] = h
 
-    # 2. Floor guarantee: shortfall against min(floor_hours, offered hours).
-    shortfall_terms = []
+    # 2. Floor guarantee: shortfall against min(floor, hours offered).
+    shortfalls = []
     for student_id in students:
-        target = min(floor_hours, len(by_student[student_id]))
-        if target <= 0:
+        target = min(floor_hours, len(offered[student_id]))
+        if target > 0:
+            short = model.NewIntVar(0, target, f"floor_short_s{student_id}")
+            model.Add(short >= target - hours[student_id])
+            shortfalls.append(short)
+    if shortfalls:
+        terms.append(-weights["floor_guarantee"] * sum(shortfalls))
+
+    # 3 + 4. Session costs: every session costs per_session; one shorter than
+    # the minimum also costs short_session per missing hour.
+    short_cost = []
+    for var, (_, _, slot_ids) in zip(z, candidates):
+        missing = rules["min_hours"] - len(slot_ids)
+        if missing > 0:
+            short_cost.append(missing * var)
+    if short_cost:
+        terms.append(-weights["short_session"] * sum(short_cost))
+    terms.append(-weights["per_session"] * sum(z))
+
+    # 5. Same student, both halves of one day.
+    halves = defaultdict(dict)  # (student, date) -> {period: [z]}
+    for (student_id, d, period), vars_ in per_half_day.items():
+        halves[(student_id, d)][period] = vars_
+    doubles = []
+    for (student_id, d), by_period in halves.items():
+        if len(by_period) < 2:
             continue
-        shortfall = model.NewIntVar(0, target, f"shortfall_s{student_id}")
-        model.Add(shortfall >= target - assigned_hours[student_id])
-        shortfall_terms.append(shortfall)
-    if shortfall_terms:
-        objective_terms.append(-weights["floor_guarantee"] * sum(shortfall_terms))
+        am = sum(by_period.get("morning", []))
+        pm = sum(by_period.get("afternoon", []))
+        if rules["allow_same_day_double"]:
+            both = model.NewBoolVar(f"double_s{student_id}_{d}")
+            model.Add(both >= am + pm - 1)
+            doubles.append(both)
+        else:
+            model.Add(am + pm <= 1)
+    if doubles:
+        terms.append(-weights["same_day_double"] * sum(doubles))
 
-    # 3. Contiguity: reward same-student adjacent-hour pairs.
-    contiguity_terms = []
-    slots_by_date = defaultdict(dict)  # date -> {hour: slot_id}
-    for s in slots:
-        slots_by_date[s.date][s.hour] = s.id
-    for student_id, slot_ids in by_student.items():
-        student_slot_set = set(slot_ids)
-        for date, hour_map in slots_by_date.items():
-            for hour, slot_id in hour_map.items():
-                next_slot_id = hour_map.get(hour + 1)
-                if next_slot_id is None:
-                    continue
-                if slot_id in student_slot_set and next_slot_id in student_slot_set:
-                    y = model.NewBoolVar(f"contig_s{student_id}_{slot_id}_{next_slot_id}")
-                    model.Add(y <= x[(student_id, slot_id)])
-                    model.Add(y <= x[(student_id, next_slot_id)])
-                    contiguity_terms.append(y)
-    if contiguity_terms:
-        objective_terms.append(weights["contiguity"] * sum(contiguity_terms))
-
-    # 4. Low churn: penalise switching on/off at the same weekday/hour across
-    # consecutive ISO weeks. This is what lets a 2-weeks-on/2-weeks-off
-    # rotation emerge on its own — never scripted.
-    weekday_hour_week = defaultdict(dict)  # (weekday, hour) -> {week_num: slot_id}
+    # 6. Low churn: the same weekday/hour switching on/off across consecutive
+    # ISO weeks. What lets a 2-on/2-off rotation emerge — never scripted.
+    weekday_hour_week = defaultdict(dict)  # (weekday, hour) -> {iso week: slot_id}
     for s in slots:
         weekday_hour_week[(s.date.weekday(), s.hour)][s.date.isocalendar()[1]] = s.id
-
-    churn_terms = []
-    for student_id, slot_ids in by_student.items():
-        student_slot_set = set(slot_ids)
-        for (weekday, hour), week_map in weekday_hour_week.items():
-            weeks = sorted(week_map.keys())
+    churn = []
+    for student_id in students:
+        for week_map in weekday_hour_week.values():
+            weeks = sorted(week_map)
             for w1, w2 in zip(weeks, weeks[1:]):
-                if w2 - w1 != 1:
+                a, b = x.get((student_id, week_map[w1])), x.get((student_id, week_map[w2]))
+                if w2 - w1 != 1 or a is None or b is None:
                     continue
-                slot1, slot2 = week_map[w1], week_map[w2]
-                if slot1 not in student_slot_set or slot2 not in student_slot_set:
-                    continue
-                churn = model.NewIntVar(0, 1, f"churn_s{student_id}_{slot1}_{slot2}")
-                model.Add(churn >= x[(student_id, slot1)] - x[(student_id, slot2)])
-                model.Add(churn >= x[(student_id, slot2)] - x[(student_id, slot1)])
-                churn_terms.append(churn)
-    if churn_terms:
-        objective_terms.append(-weights["low_churn"] * sum(churn_terms))
+                c = model.NewBoolVar(f"churn_s{student_id}_{w1}_{week_map[w1]}")
+                model.Add(c >= a - b)
+                model.Add(c >= b - a)
+                churn.append(c)
+    if churn:
+        terms.append(-weights["low_churn"] * sum(churn))
 
-    # 5. Equalise hours: minimise spread among students who offered anything.
-    if len(students) > 1 and max_possible > 0:
-        max_h = model.NewIntVar(0, max_possible, "max_hours")
-        min_h = model.NewIntVar(0, max_possible, "min_hours")
-        for student_id in students:
-            model.Add(assigned_hours[student_id] <= max_h)
-            model.Add(assigned_hours[student_id] >= min_h)
-        spread = model.NewIntVar(0, max_possible, "spread")
-        model.Add(spread == max_h - min_h)
-        objective_terms.append(-weights["equalise_hours"] * spread)
+    # 7. Equalise hours among students who offered anything.
+    if len(students) > 1:
+        top = max(len(v) for v in offered.values())
+        hi = model.NewIntVar(0, top, "max_hours")
+        lo = model.NewIntVar(0, top, "min_hours")
+        for h in hours.values():
+            model.Add(h <= hi)
+            model.Add(h >= lo)
+        terms.append(-weights["equalise_hours"] * (hi - lo))
 
-    model.Maximize(sum(objective_terms))
+    model.Maximize(sum(terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = 8
     status = solver.Solve(model)
-
-    meta = {
-        "status": solver.StatusName(status),
-        "total_slots": len(slots),
-        "wall_time_seconds": round(solver.WallTime(), 2),
-    }
+    meta = dict(base_meta, status=solver.StatusName(status),
+                wall_time_seconds=round(solver.WallTime(), 2), candidate_sessions=len(candidates))
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        result = dict(locked)
-        for (student_id, slot_id), var in x.items():
-            if solver.Value(var) == 1:
-                result[slot_id] = student_id
-        meta["assigned"] = len(result)
-        meta["regular_locked"] = len(locked)
-        meta["regular_locked_slot_ids"] = list(locked.keys())
+        result = {slot_id: sid for (sid, slot_id), v in x.items() if solver.Value(v)}
+        chosen = [c for var, c in zip(z, candidates) if solver.Value(var)]
         meta["objective_value"] = solver.ObjectiveValue()
-        return result, meta
+    else:
+        result, chosen = _greedy_sessions(slots, offered, locked, rules)
+        meta["fallback"] = "greedy_sessions"
 
-    # Fallback: greedy round-robin (CLAUDE.md #6 — explainable, acceptable if
-    # CP-SAT can't produce a feasible solution in the time budget).
-    result = _greedy_round_robin(slots, by_slot, floor_hours)
-    result.update(locked)
-    meta["assigned"] = len(result)
-    meta["regular_locked"] = len(locked)
-    meta["regular_locked_slot_ids"] = list(locked.keys())
-    meta["fallback"] = "greedy_round_robin"
+    honoured = [slot_id for slot_id, sid in locked.items() if result.get(slot_id) == sid]
+    lengths = [len(c[2]) for c in chosen]
+    meta.update({
+        "assigned": len(result),
+        "sessions": len(chosen),
+        "session_lengths": {str(n): lengths.count(n) for n in sorted(set(lengths))},
+        "regular_locked": len(honoured),
+        "regular_locked_slot_ids": honoured,
+        "regular_not_honoured": len(locked) - len(honoured),
+    })
     return result, meta
 
 
-def _greedy_round_robin(slots, by_slot, floor_hours):
-    """Repeatedly give the next contested hour to the eligible student with
-    the fewest hours so far. Deterministic, fully explainable."""
-    hours_so_far = defaultdict(int)
-    result = {}
-    for slot in slots:
-        candidates = by_slot.get(slot.id, [])
-        if not candidates:
-            continue
-        best = min(candidates, key=lambda sid: (hours_so_far[sid], sid))
-        result[slot.id] = best
-        hours_so_far[best] += 1
-    return result
+def _greedy_sessions(slots, offered, locked, rules):
+    """Fallback, fully explainable: seed regular hours, then go half-day by
+    half-day and keep handing a still-open run to whoever has the fewest
+    hours so far (full-length runs before short ones), until nobody can take
+    one."""
+    shortest = 1 if rules["short_as_last_resort"] else rules["min_hours"]
+    longest = rules["max_hours"]
+    hours = defaultdict(int)
+    result, chosen = {}, []
+
+    for slot_id, sid in locked.items():
+        result[slot_id] = sid
+        hours[sid] += 1
+
+    half_days = _half_days(slots)
+    for key in sorted(half_days, key=lambda k: (k[0], k[1] != "morning")):
+        day_slots = half_days[key]
+        seated = {result[s.id] for s in day_slots if s.id in result}
+        while True:
+            best = None
+            for sid in sorted(offered):
+                if sid in seated:
+                    continue
+                run, longest_run = [], []
+                for s in day_slots:
+                    free = s.id not in result and s.id in offered[sid]
+                    if free and run and s.hour == run[-1].hour + 1:
+                        run.append(s)
+                    else:
+                        run = [s] if free else []
+                    if len(run) > len(longest_run):
+                        longest_run = list(run)
+                longest_run = longest_run[:longest]
+                if len(longest_run) < shortest:
+                    continue
+                # Full-length sessions first; a short one only if that's all
+                # that's left. Then fewest hours so far, then the longer run.
+                rank = (len(longest_run) < rules["min_hours"], hours[sid], -len(longest_run), sid)
+                if best is None or rank < best[0]:
+                    best = (rank, sid, longest_run)
+            if best is None:
+                break
+            _, sid, run = best
+            for s in run:
+                result[s.id] = sid
+            hours[sid] += len(run)
+            seated.add(sid)
+            chosen.append((sid, key, [s.id for s in run]))
+    return result, chosen

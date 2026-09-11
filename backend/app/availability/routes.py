@@ -3,7 +3,9 @@ from flask_login import current_user
 
 from app.availability import bp
 from app.extensions import db
-from app.models import Month, Slot, Availability, SelectionWindow, ClosedDate, RegularSlot, SLOT_HOURS
+from app.models import (
+    Month, Slot, Availability, AvailabilityOptOut, SelectionWindow, ClosedDate, RegularSlot, SLOT_HOURS,
+)
 from app.utils.decorators import login_required_api
 from app.utils.periods import weekdays_in_month
 from app.utils.tz import local_now
@@ -82,6 +84,14 @@ def get_availability(month_id):
                   .filter(Slot.month_id == month.id, Availability.student_id.in_(regular_student_ids)).all()):
             saved_student_ids.add(a.student_id)
             avail_pairs.add((a.student_id, a.slot_id))
+        # "No hours this month" is an answer too: every regular hour of theirs
+        # is confirmed free for someone else.
+        saved_student_ids |= {o.student_id for o in AvailabilityOptOut.query.filter(
+            AvailabilityOptOut.month_id == month.id,
+            AvailabilityOptOut.student_id.in_(regular_student_ids)).all()}
+
+    no_hours = bool(current_user.student_id and AvailabilityOptOut.query.filter_by(
+        month_id=month.id, student_id=current_user.student_id).first())
 
     dates, cells = [], []
     for d in weekdays_in_month(month.year_month):
@@ -91,9 +101,9 @@ def get_availability(month_id):
             is_regular = (d, hour) in regular_mine
             # First time visiting this month (nothing saved yet): suggest the
             # student's own regular hours as pre-checked. Once they've saved
-            # anything, honour exactly that — never re-inject a default over
-            # a deliberate uncheck (e.g. a one-off conflict that week).
-            selected = slot is not None and (slot.id in mine or (not has_existing and is_regular))
+            # anything — or said "no hours this month" — honour exactly that,
+            # never re-inject a default over a deliberate uncheck.
+            selected = slot is not None and (slot.id in mine or (not has_existing and not no_hours and is_regular))
 
             reg_student_id = regular_by_date_hour.get((d, hour))
             regular_declined = bool(
@@ -112,6 +122,7 @@ def get_availability(month_id):
     return jsonify({
         "month": month.to_dict(),
         "window_open": _window_is_open(month),
+        "no_hours": no_hours,
         "dates": dates,
         "cells": cells,
     })
@@ -172,5 +183,33 @@ def set_availability(month_id):
 
     for sid in slot_ids:
         db.session.add(Availability(student_id=current_user.student_id, slot_id=sid))
+    if slot_ids:
+        # Picking hours replaces an earlier "no hours this month".
+        AvailabilityOptOut.query.filter_by(
+            student_id=current_user.student_id, month_id=month.id).delete(synchronize_session=False)
     db.session.commit()
     return jsonify({"ok": True, "count": len(slot_ids)})
+
+
+@bp.post("/<int:month_id>/no-hours")
+@login_required_api
+def set_no_hours(month_id):
+    """The student's answer "I'm not available this month": clears any hours
+    they'd picked and records the answer (see AvailabilityOptOut). Undone by
+    simply picking hours and saving."""
+    month = Month.query.get_or_404(month_id)
+    if not current_user.student_id:
+        return jsonify({"error": "students_only"}), 403
+    if not _window_is_open(month):
+        return jsonify({"error": "selection_closed"}), 409
+
+    month_slot_ids = [s.id for s in Slot.query.filter_by(month_id=month.id).all()]
+    if month_slot_ids:
+        Availability.query.filter(
+            Availability.student_id == current_user.student_id,
+            Availability.slot_id.in_(month_slot_ids),
+        ).delete(synchronize_session=False)
+    if not AvailabilityOptOut.query.filter_by(student_id=current_user.student_id, month_id=month.id).first():
+        db.session.add(AvailabilityOptOut(student_id=current_user.student_id, month_id=month.id))
+    db.session.commit()
+    return jsonify({"ok": True, "no_hours": True})

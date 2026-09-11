@@ -31,17 +31,18 @@
               <td class="h mono">[[ hourLabel(h) ]]</td>
               <td v-for="d in week" v-bind:key="d+'_'+h"
                   class="reg-cell" v-bind:class="cellClass(d, h)"
-                  v-bind:title="row(d,h) && row(d,h).assignment ? null : 'Click to view open shifts'"
-                  style="cursor:pointer;" v-on:click="onCellClick(d, h)">
+                  v-bind:title="isOpenShift(d, h) ? 'Open shift — tap to claim it on Open Shifts' : null"
+                  v-bind:style="isOpenShift(d, h) ? 'cursor:pointer;' : null" v-on:click="onCellClick(d, h)">
                 <span class="sched-name-only" v-if="row(d,h) && row(d,h).assignment">[[ studentLabel(students[row(d,h).assignment.student_id]) ]]</span>
-                <span class="open-label" v-else-if="row(d,h)">Open</span>
+                <span class="open-label" v-else-if="isOpenShift(d, h)">Open</span>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
     </template>
-    <div class="weeknote">your shifts are green, everyone else is greyed · open cells (red) → tap to claim on Open Shifts</div>
+    <div class="weeknote">your shifts are green, everyone else is greyed · open shifts (red) → tap to claim on Open Shifts ·
+      hatched = nobody scheduled, not on offer</div>
   </template>
 </div>
 {% endblock %}
@@ -92,16 +93,20 @@ const app = createApp({
       const name = s.english_name || s.chinese_name;
       return this.narrow ? OIA.shortName(name) : name;
     },
+    // Claimable right now — the same test as the Open Shifts list.
+    isOpenShift(d, h) {
+      const r = this.row(d, h);
+      return !!(r && !r.assignment && r.open_shift);
+    },
     cellClass(d, h) {
       const r = this.row(d, h);
       if (!r) return {};
-      if (!r.assignment) return { "sched-open": true };
+      if (!r.assignment) return r.open_shift ? { "sched-open": true } : { "sched-uncovered": true };
       const mine = myStudentId && r.assignment.student_id === myStudentId;
       return { "sched-mine": mine, "sched-other": !mine };
     },
     onCellClick(d, h) {
-      const r = this.row(d, h);
-      if (r && !r.assignment) window.location.href = "/open-shifts";
+      if (this.isOpenShift(d, h)) window.location.href = "/open-shifts";
     },
   },
 });

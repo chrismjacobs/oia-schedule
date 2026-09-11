@@ -86,7 +86,10 @@ def reset_demo():
         Availability.query.filter(Availability.student_id.in_(demo_student_ids)).delete(synchronize_session=False)
         Assignment.query.filter(Assignment.student_id.in_(demo_student_ids)).delete(synchronize_session=False)
 
-        from app.models import LeaveRequest, ReopenedSlot, TaskCompletion, CustomTask, TimecardUpload
+        from app.models import (LeaveRequest, ReopenedSlot, TaskCompletion, CustomTask, TimecardUpload,
+                                AvailabilityOptOut)
+        AvailabilityOptOut.query.filter(AvailabilityOptOut.student_id.in_(demo_student_ids)).delete(
+            synchronize_session=False)
         ReopenedSlot.query.filter(ReopenedSlot.claimed_by.in_(demo_student_ids)).update(
             {"claimed_by": None, "claimed_at": None}, synchronize_session=False)
         LeaveRequest.query.filter(LeaveRequest.student_id.in_(demo_student_ids)).delete(synchronize_session=False)

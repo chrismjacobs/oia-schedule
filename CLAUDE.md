@@ -138,9 +138,18 @@ Open/close dates are **config values**, not hard-coded.
 
 ## 7. Scheduling and allocation
 
-**The atom is the hour.** Students select individual hours (08:00–12:00, 13:00–17:00,
-Mon–Fri → 8 slots/day, 40/week). The solver assigns each hour to at most one
-available student. Blocks/contiguity are *preferences*, not fixed units.
+**Students select hours; the solver assigns sessions.** Students still tick
+individual hours (08:00–12:00, 13:00–17:00, Mon–Fri → 8 slots/day, 40/week), and
+each hour still goes to at most one student. But the solver hands out **sessions**:
+one student on one unbroken run of hours inside a morning or an afternoon (never
+across lunch), **2–4 hours** by default (min/max are config). At most one session
+per student per half-day. A session shorter than the minimum is allowed only as a
+last resort to cover an hour nobody else can (config can forbid it); one student
+getting both a morning and an afternoon on the same day is discouraged (config can
+forbid it). *This was originally "the atom is the hour" with contiguity as a mild
+preference; in practice the floor and equalising terms carved single mornings into
+four one-hour pieces for four students, so the shift became the unit. Don't go
+back to hour-by-hour allocation.*
 
 ### Hard constraints (never violated)
 - At most one student per slot.
@@ -152,7 +161,8 @@ available student. Blocks/contiguity are *preferences*, not fixed units.
 1. **Coverage** — fill as many slots as possible.
 2. **Floor guarantee** — everyone who selected gets at least a minimum before anyone
    gets extra (protects students relying on the pay).
-3. **Contiguity** — prefer ~2-hour runs; mildly penalise isolated single hours.
+3. **Session shape** — sessions below the minimum length are a last resort; fewer,
+   longer sessions over the same hours; avoid same-day morning + afternoon doubles.
 4. **Low churn / consistency** — penalise week-to-week pattern changes. The
    2-weeks-on/2-off rotation should **emerge** from this — do not script it.
 5. **Equalise hours** — spread totals as evenly as possible.

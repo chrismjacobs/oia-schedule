@@ -331,6 +331,21 @@ class Availability(db.Model):
     __table_args__ = (db.UniqueConstraint("student_id", "slot_id", name="uq_availability_student_slot"),)
 
 
+class AvailabilityOptOut(db.Model):
+    """A student's answer "no hours this month". Needed because an empty
+    selection is otherwise indistinguishable from never having answered —
+    this is what stops the sign-in page reminding them, and what tells the
+    availability grid their regular hours are free for others. Saving any
+    hours for the month removes it."""
+    __tablename__ = "availability_optout"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=False)
+    month_id = db.Column(db.Integer, db.ForeignKey("month.id"), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=local_now)
+
+    __table_args__ = (db.UniqueConstraint("student_id", "month_id", name="uq_availability_optout_student_month"),)
+
+
 class Schedule(db.Model):
     __tablename__ = "schedule"
     id = db.Column(db.Integer, primary_key=True)

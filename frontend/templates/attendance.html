@@ -4,6 +4,19 @@
 <div id="att-app" v-cloak>
   <section class="pad" style="margin-top:10px;">
     <h2>Sign in / out <span class="hint">簽到退</span></h2>
+    <!-- Next month is open for selection and this student hasn't picked
+         anything yet — shown on every visit (sign-in and sign-out alike)
+         until they do. -->
+    <div class="panel" v-for="r in (today ? today.availability_reminders : [])" v-bind:key="'avail-' + r.month_id"
+         role="status" style="border-left:4px solid var(--accent); background:var(--avail-blue-bg);">
+      <h3 style="color:var(--accent);">Pick your hours for [[ r.year_month ]] 請選填 [[ r.year_month ]] 可上班時段</h3>
+      <p style="margin:4px 0 10px;">Selection is open and you haven't chosen any hours yet.
+        <span v-if="r.closes_at">It closes <strong class="mono">[[ formatDateTime(r.closes_at) ]]</strong>.</span>
+        <span v-else>It could close at any time.</span>
+        Without a selection you won't be scheduled.</p>
+      <a class="btn" href="/availability">Choose my hours 選填時段</a>
+    </div>
+
     <div class="panel" v-if="today && today.due_tasks.length" style="border-left:4px solid var(--warn); background:var(--warn-bg);">
       <h3 style="color:var(--warn);">Needs doing today 今日待辦</h3>
       <div v-for="dt in today.due_tasks" v-bind:key="dt.id" style="margin-bottom:8px;">
@@ -223,6 +236,11 @@ const app = createApp({
     },
     formatTime(iso) {
       return iso ? iso.slice(11, 16) : "";
+    },
+    // "2026-09-25T17:00:00" -> "Fri 09-25 17:00"
+    formatDateTime(iso) {
+      if (!iso) return "";
+      return OIA.weekdayLabel(iso.slice(0, 10)) + " " + iso.slice(5, 10) + " " + iso.slice(11, 16);
     },
     taskLabels(session) {
       const labels = [];

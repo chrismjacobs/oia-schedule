@@ -24,6 +24,7 @@
               <th v-for="d in week" v-bind:key="d" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)">
                 [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
                 <span class="day-tag" v-if="dayKind(d) === 'closed'"><br>[[ narrow ? 'cl' : 'closed' ]]</span>
+                <span class="day-tag warn" v-if="dayKind(d) === 'closed-live'"><br>[[ narrow ? 'cl!' : 'closed · still staffed' ]]</span>
               </th>
             </tr>
           </thead>
@@ -31,7 +32,7 @@
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ hourLabel(h) ]]</td>
               <template v-for="d in week" v-bind:key="d + '_' + h">
-              <td v-if="dayKind(d) !== 'work'" class="reg-cell" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)"></td>
+              <td v-if="dayKind(d) === 'out' || dayKind(d) === 'closed'" class="reg-cell" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)"></td>
               <td v-else
                   class="reg-cell" v-bind:class="[cellClass(d, h), dayClass(d)]" v-bind:style="cellStyle(d, h)"
                   v-bind:title="cellTitle(d, h)">
@@ -40,7 +41,7 @@
                   <span class="sched-name">[[ studentLabel(row(d, h).student) ]]</span>
                 </span>
                 <span class="adv-cell" v-else-if="row(d, h) && row(d, h).advertised">
-                  <span class="hint">[[ narrow ? 'adv' : 'advertised' ]]</span>
+                  <span class="hint">[[ narrow ? 'open' : 'open shift' ]]</span>
                   <button class="icon-btn" type="button"
                           v-bind:disabled="busySlot === cellKey(d, h)"
                           v-on:click="retract(row(d, h))"
@@ -51,8 +52,9 @@
                 </span>
                 <button class="icon-btn adv-btn" type="button" v-else-if="canAdvertise(d)"
                         v-bind:disabled="busySlot === cellKey(d, h)"
-                        v-on:click="advertise(d, h)"
-                        aria-label="Advertise this hour on Open Shifts">
+                        v-on:click.stop="toggleMenu(d, h, $event)"
+                        aria-haspopup="menu" v-bind:aria-expanded="!!(menu && menu.key === cellKey(d, h))"
+                        aria-label="Open this hour on Open Shifts">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z"/>
@@ -70,8 +72,18 @@
     </template>
     <div class="weeknote">colour + shape = one student at a glance · amber ring = leave requested, not yet approved ·
       hatched = unassigned · solid grey = unavailable (no slot) ·
-      📢 advertises an empty hour on Open Shifts, ✕ pulls it back · days already past and days outside this month are greyed out</div>
+      📢 puts an empty hour on Open Shifts (announced on LINE, or quietly), ✕ pulls it back ·
+      days already past and days outside this month are greyed out</div>
     <p class="error-text pad" v-if="message">[[ message ]]</p>
+
+    <!-- The 📢 choice. Fixed to the viewport, not inside the cell: the grid
+         scrolls inside .weekwrap, which would clip a menu on the bottom rows. -->
+    <div class="adv-menu" role="menu" v-if="menu" v-on:click.stop
+         v-bind:style="{ top: menu.top + 'px', left: menu.left + 'px' }">
+      <div class="adv-menu-title mono">[[ menu.d.slice(5) ]] [[ menu.h ]]:00</div>
+      <button type="button" role="menuitem" v-on:click="advertise(menu.d, menu.h, true)">Open + announce on LINE</button>
+      <button type="button" role="menuitem" class="secondary" v-on:click="advertise(menu.d, menu.h, false)">Open quietly — no message</button>
+    </div>
 
     <div class="roster">
       <h3>Roster · 名冊</h3>
@@ -95,7 +107,8 @@ const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { months: [], monthId: null, payload: null, busySlot: null, message: "", narrow: false, HOURS };
+    return { months: [], monthId: null, payload: null, busySlot: null, message: "", narrow: false, HOURS,
+             menu: null };
   },
   computed: {
     rowsByKey() {
@@ -113,6 +126,7 @@ const app = createApp({
       return OIA.monthWeeks(this.payload.year_month);
     },
     workingDates() { return new Set(this.payload ? this.payload.dates : []); },
+    slotDates() { return new Set(this.payload ? this.payload.slots.map(r => r.slot.date) : []); },
     todayStr() {
       const d = new Date();
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
@@ -126,6 +140,12 @@ const app = createApp({
   },
   async mounted() {
     OIA.watchNarrow((v) => { this.narrow = v; });
+    // The 📢 menu closes on any outside click, Escape, or scroll (it's fixed
+    // in place, so scrolling would leave it floating away from its cell).
+    document.addEventListener("click", this.closeMenu);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeMenu(); });
+    window.addEventListener("scroll", this.closeMenu, true);
+    window.addEventListener("resize", this.closeMenu);
     this.months = await OIA.api.get("/api/admin/months");
     if (this.months.length) {
       const preferred = this.months.find(m => m.state === "running") || this.months[0];
@@ -141,10 +161,14 @@ const app = createApp({
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
     // 'work' = a working day of this month, 'closed' = a closed date of this
-    // month, 'out' = spill-over into the previous/next month.
+    // month, 'out' = spill-over into the previous/next month. 'closed-live'
+    // = closed after people were already scheduled on it: slot sync keeps
+    // those hours rather than pull them from a committed roster, so they're
+    // drawn (and flagged) instead of hidden behind a blank column.
     dayKind(d) {
       if (d.slice(0, 7) !== this.payload.year_month) return "out";
-      return this.workingDates.has(d) ? "work" : "closed";
+      if (this.workingDates.has(d)) return "work";
+      return this.slotDates.has(d) ? "closed-live" : "closed";
     },
     // Past days stay on the grid — the overseer can still look back over the
     // month — but greyed so the live part stands out.
@@ -156,6 +180,8 @@ const app = createApp({
       const kind = this.dayKind(d);
       if (kind === "out") return "Not part of this month";
       if (kind === "closed") return "Closed" + (this.payload.closed[d] ? " — " + this.payload.closed[d] : "");
+      if (kind === "closed-live") return "Closed" + (this.payload.closed[d] ? " — " + this.payload.closed[d] : "") +
+        ", but people are still scheduled — reassign or cancel their hours";
       return null;
     },
     weekPast(week) { return week[week.length - 1] < this.todayStr; },
@@ -164,7 +190,8 @@ const app = createApp({
       return this.narrow ? OIA.shortName(name) : name;
     },
     // Advertising a past hour helps nobody — the offer could never be taken up.
-    canAdvertise(d) { return d >= this.todayStr; },
+    // Nor on a day the office is closed.
+    canAdvertise(d) { return d >= this.todayStr && this.workingDates.has(d); },
     cellClass(d, h) {
       const r = this.row(d, h);
       if (!r) return { "sched-noslot": true };
@@ -192,21 +219,38 @@ const app = createApp({
         return who + " requested leave for this hour — pending approval: " + r.pending_leave.reason;
       }
       if (r && r.advertised) return "Open on Open Shifts — click ✕ to retract";
-      if (!r) return "No slot generated for this hour — advertising it creates one";
+      if (!r) return "No slot generated for this hour — opening it creates one";
       if (!r.student) return "Uncovered";
       return null;
     },
-    async advertise(d, h) {
+    // The 📢 icon asks how to open the hour: announced to the LINE group, or
+    // quietly (on Open Shifts, no message — e.g. the overseer already knows
+    // who'll take it back). Menu sits just under the icon, in viewport space.
+    toggleMenu(d, h, ev) {
       const key = this.cellKey(d, h);
+      if (this.menu && this.menu.key === key) { this.menu = null; return; }
+      const rect = ev.currentTarget.getBoundingClientRect();
+      const width = 210;
+      const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
+      this.menu = { key, d, h, top: rect.bottom + 4, left };
+      this.$nextTick(() => {
+        const first = document.querySelector(".adv-menu [role=menuitem]");
+        if (first) first.focus();
+      });
+    },
+    closeMenu() { this.menu = null; },
+    async advertise(d, h, announce) {
+      const key = this.cellKey(d, h);
+      this.menu = null;
       this.busySlot = key;
       this.message = "";
       try {
         const r = this.row(d, h);
         // A cell with no Slot behind it is addressed by (month, date, hour) —
         // the backend creates the Slot on demand.
-        await OIA.api.post("/api/leave/advertise", r
+        await OIA.api.post("/api/leave/advertise", Object.assign(r
           ? { slot_id: r.slot.id }
-          : { month_id: this.monthId, date: d, hour: h });
+          : { month_id: this.monthId, date: d, hour: h }, { announce: announce !== false }));
         await this.reload();
       } catch (e) {
         this.message = e.message === "no_committed_schedule"

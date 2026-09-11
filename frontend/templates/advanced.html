@@ -26,15 +26,37 @@
   </div>
 
   <div class="panel" v-if="settings">
-    <h2>Solver weights 排班權重設定</h2>
-    <div class="field-row">
-      <div class="field" v-for="k in Object.keys(settings.solver_weights)" v-bind:key="k">
-        <label>[[ k ]]</label>
+    <h2>Solver 排班設定</h2>
+    <h3 style="margin-top:6px;">Shift shape</h3>
+    <p class="hint">The solver hands out whole sessions — one student, one unbroken run of hours inside a
+      morning or an afternoon — not single hours.</p>
+    <div class="field-row" style="margin-top:8px;">
+      <div class="field"><label>Shortest session (hours)</label>
+        <input type="number" min="1" max="4" v-model.number="settings.solver_session_rules.min_hours"></div>
+      <div class="field"><label>Longest session (hours)</label>
+        <input type="number" min="1" max="4" v-model.number="settings.solver_session_rules.max_hours"></div>
+      <div class="field"><label>Floor hours per student</label>
+        <input type="number" min="0" v-model.number="settings.solver_floor_hours"></div>
+    </div>
+    <label class="check-row">
+      <input type="checkbox" v-model="settings.solver_session_rules.short_as_last_resort">
+      Allow a shorter session as a last resort, only to cover an hour nobody else can
+    </label>
+    <label class="check-row">
+      <input type="checkbox" v-model="settings.solver_session_rules.allow_same_day_double">
+      Allow one student a morning and an afternoon session on the same day (discouraged, not forbidden)
+    </label>
+
+    <h3 style="margin-top:14px;">Weights</h3>
+    <p class="hint">Higher wins. Each is meant to outweigh everything listed below it.</p>
+    <div class="field-row" style="margin-top:8px;">
+      <div class="field" v-for="k in weightKeys" v-bind:key="k">
+        <label v-bind:title="WEIGHT_HELP[k] && WEIGHT_HELP[k][1]">[[ WEIGHT_HELP[k] ? WEIGHT_HELP[k][0] : k ]]</label>
         <input type="number" v-model.number="settings.solver_weights[k]">
       </div>
-      <div class="field"><label>Floor hours</label><input type="number" v-model.number="settings.solver_floor_hours"></div>
     </div>
     <button v-on:click="saveSettings">Save</button>
+    <span class="hint" style="margin-left:8px;">[[ settingsMessage ]]</span>
   </div>
 
   <div class="panel" v-if="settings">
@@ -131,17 +153,35 @@
 {% block page_script %}
 <script>
 const { createApp } = Vue;
+// Plain-language name and what each unit of the weight means.
+const WEIGHT_HELP = {
+  coverage: ["Coverage (per hour filled)", "Filling an hour at all — the top priority."],
+  floor_guarantee: ["Floor (per hour short)", "Getting everyone to the floor hours before anyone gets extra."],
+  short_session: ["Short session (per hour short)", "Cost of a session under the shortest length — keep above Floor so it's only a last resort."],
+  per_session: ["Per session", "Cost of each session — favours one long shift over several short ones."],
+  same_day_double: ["Same-day double", "Cost of giving one student both a morning and an afternoon."],
+  low_churn: ["Consistency (per change)", "Keeping the same weekday/hour from week to week."],
+  equalise_hours: ["Equalise hours", "Narrowing the gap between most and least scheduled."],
+};
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
       semesters: [], newSemester: { name: "", starts_on: "", ends_on: "" },
-      settings: null,
+      settings: null, settingsMessage: "", WEIGHT_HELP,
       busy: false, demoMessage: "",
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
       tickResult: "",
       diag: null, diagError: "",
     };
+  },
+  computed: {
+    // Priority order (the JSON arrives alphabetised), then anything unknown.
+    weightKeys() {
+      const have = Object.keys(this.settings.solver_weights);
+      return Object.keys(WEIGHT_HELP).filter(k => have.includes(k))
+        .concat(have.filter(k => !(k in WEIGHT_HELP)));
+    },
   },
   async mounted() {
     await Promise.all([this.loadSemesters(), this.loadSettings()]);
@@ -158,7 +198,13 @@ const app = createApp({
       } finally { this.busy = false; }
     },
     async saveSettings() {
-      this.settings = await OIA.api.put("/api/admin/settings", this.settings);
+      this.settingsMessage = "";
+      try {
+        this.settings = await OIA.api.put("/api/admin/settings", this.settings);
+        this.settingsMessage = "Saved.";
+      } catch (e) {
+        this.settingsMessage = (e.payload && e.payload.message) || e.message;
+      }
     },
     async seedDemo() {
       this.busy = true; this.demoMessage = "";

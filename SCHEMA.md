@@ -167,6 +167,21 @@ An hour a student offered during selection. No per-student cap.
 
 `(student_id, slot_id)` unique. Solver input.
 
+## `availability_optout`
+A student's answer "no hours this month" — an empty selection alone can't be
+told apart from never having answered. Stops the sign-in page's "pick your
+hours" reminder and marks their regular hours free for others. Removed as soon
+as they save any hours for that month.
+
+| field | type | notes |
+|---|---|---|
+| id | pk | |
+| student_id | fk → student | |
+| month_id | fk → month | |
+| created_at | ts | |
+
+`(student_id, month_id)` unique.
+
 ---
 
 ## `schedule`

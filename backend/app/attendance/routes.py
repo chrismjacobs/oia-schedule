@@ -7,7 +7,7 @@ from app.attendance import bp
 from app.extensions import db
 from app.models import (
     Slot, Assignment, Schedule, AttendanceSession, SessionHour,
-    RegularTask, TaskCompletion, CustomTask,
+    RegularTask, TaskCompletion, CustomTask, Month, Availability, AvailabilityOptOut, SelectionWindow,
 )
 from app.notifications.service import notify_signed_in, notify_signed_out
 from app.utils.decorators import login_required_api
@@ -155,7 +155,31 @@ def today():
         "due_tasks": [
             dict(t.to_dict(), overdue=t.event_date < today_date) for t in due_tasks
         ],
+        "availability_reminders": _availability_reminders(current_user.student_id),
     })
+
+
+def _availability_reminders(student_id):
+    """Months open for selection that this student hasn't answered yet —
+    no hours picked and no "no hours this month". Shown on the sign-in/out
+    page, the one screen every working student is guaranteed to open, so an
+    unanswered month can't slip past someone who never reads the group chat."""
+    out = []
+    for month in Month.query.filter_by(state="selection_open").order_by(Month.year_month).all():
+        if AvailabilityOptOut.query.filter_by(student_id=student_id, month_id=month.id).first():
+            continue
+        picked = (Availability.query.join(Slot, Availability.slot_id == Slot.id)
+                  .filter(Availability.student_id == student_id, Slot.month_id == month.id)
+                  .first())
+        if picked:
+            continue
+        window = SelectionWindow.query.filter_by(month_id=month.id).first()
+        out.append({
+            "month_id": month.id,
+            "year_month": month.year_month,
+            "closes_at": window.closes_at.isoformat() if window and window.closes_at else None,
+        })
+    return out
 
 
 @bp.get("/history")

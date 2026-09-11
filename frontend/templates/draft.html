@@ -109,7 +109,13 @@ const app = createApp({
       this.busy = true; this.message = "";
       try {
         const res = await OIA.api.post("/api/schedule/months/" + this.monthId + "/generate-draft");
-        this.message = "Solver: " + res.meta.status + ", assigned " + res.meta.assigned + "/" + res.meta.total_slots;
+        const m = res.meta;
+        const lengths = Object.entries(m.session_lengths || {})
+          .map(([h, n]) => n + "×" + h + "h").join(", ");
+        this.message = "Solver: " + m.status + (m.fallback ? " (fallback)" : "") +
+          " — filled " + m.assigned + "/" + m.total_slots + " hours" +
+          (m.sessions ? " in " + m.sessions + " sessions (" + lengths + ")" : "") + "." +
+          (m.regular_not_honoured ? " " + m.regular_not_honoured + " regular hour(s) couldn't be kept." : "");
         this.months = await OIA.api.get("/api/admin/months");
         await this.loadPayload();
       } catch (e) {

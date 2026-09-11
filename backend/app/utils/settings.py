@@ -21,8 +21,20 @@ def set_setting(key, value):
     return row.value
 
 
+def _merged(key, defaults):
+    """Saved overrides on top of the config defaults — so a weight added
+    later still has a value, and one retired later is dropped rather than
+    lingering on the settings page."""
+    saved = get_setting(key) or {}
+    return {k: saved.get(k, v) for k, v in defaults.items()}
+
+
 def get_solver_weights():
-    return get_setting("solver_weights", dict(current_app.config["SOLVER_WEIGHTS"]))
+    return _merged("solver_weights", current_app.config["SOLVER_WEIGHTS"])
+
+
+def get_session_rules():
+    return _merged("solver_session_rules", current_app.config["SOLVER_SESSION_RULES"])
 
 
 def get_floor_hours():

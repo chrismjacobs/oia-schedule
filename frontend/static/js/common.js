@@ -176,6 +176,20 @@
     document.querySelectorAll("[data-drawer-close]").forEach((el) => el.addEventListener("click", close));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
+    // End an overseer's "Log in as" — back to their own account.
+    const returnBtn = document.querySelector("[data-return-overseer]");
+    if (returnBtn) {
+      returnBtn.addEventListener("click", async () => {
+        returnBtn.disabled = true;
+        try {
+          const res = await api.post("/api/auth/return-to-overseer");
+          window.location.href = res.redirect || "/";
+        } catch (e) {
+          window.location.href = "/login";
+        }
+      });
+    }
+
     const logoutBtn = document.querySelector("[data-logout]");
     if (logoutBtn) {
       logoutBtn.addEventListener("click", async () => {

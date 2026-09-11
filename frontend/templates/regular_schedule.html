@@ -33,6 +33,7 @@
         <div class="field"><label>Reason</label><input v-model="newClosedDate.reason" placeholder="National holiday"></div>
         <div class="field" style="align-self:end;"><button class="secondary" type="submit">Add</button></div>
       </form>
+      <sync-note v-if="sync && syncWhere === 'setup'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
     </template>
   </div>
 
@@ -132,16 +133,19 @@
       <div>
         <strong>2. This month → slots</strong>
         <p class="hint">[[ slotCount === null ? '…' : slotCount + ' slots exist.' ]]
-          Hours marked Unavailable never get one.</p>
+          Hours marked Unavailable and closed days never get one.</p>
       </div>
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button v-bind:disabled="busy" v-on:click="generateSlots(false)">Generate slots</button>
-        <button class="danger" v-bind:disabled="busy" v-on:click="generateSlots(true)">Regenerate</button>
+        <button v-bind:disabled="busy" v-on:click="generateSlots">[[ slotCount ? 'Update slots' : 'Build slots' ]]</button>
       </div>
     </div>
     <p class="hint" v-if="genMessage">[[ genMessage ]]</p>
-    <p class="hint">Regenerating deletes this month's slots and every availability tick against them.
-      Refused once a schedule is committed.</p>
+    <sync-note v-if="sync && syncWhere === 'build'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
+    <p class="hint">Once slots exist, later changes apply by themselves — closing a day, or switching
+      an hour between Unavailable and open, adds or removes just that hour's slot, and only the
+      student picks on that hour are dropped. Hours someone is scheduled on in a committed roster are
+      never removed; you're told about them instead. If selection opens (by hand or on schedule)
+      before slots are built, they're built from this plan first.</p>
   </div>
 
   <div class="panel">
@@ -185,9 +189,10 @@
 
     <template v-if="monthId">
       <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <button v-bind:disabled="busy" v-on:click="populateMonth">Populate from template</button>
+        <button v-bind:disabled="busy" v-on:click="populateMonth(false)">Populate from template</button>
         <span class="hint">[[ populateMessage ]]</span>
       </div>
+      <sync-note v-if="sync && syncWhere === 'grid'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
 
       <template v-if="regularSlots.length">
         <template v-for="(week, wi) in weeks" v-bind:key="wi">
@@ -263,6 +268,9 @@ const app = createApp({
       newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
       swOpens: "", swCloses: "", genMessage: "",
       window: null, slotCount: null, closeout: null,
+      // The last slot sync's summary, and which panel's action produced it
+      // (so it shows next to the thing that was just changed).
+      sync: null, syncWhere: null,
     };
   },
   computed: {
@@ -282,7 +290,11 @@ const app = createApp({
       return map;
     },
     weeks() {
-      const dates = Array.from(new Set(this.regularSlots.map(r => r.date))).sort();
+      // A day closed after the pattern was copied still has regular_slot
+      // rows; leave it out — editing a closed day's hours means nothing.
+      const closed = new Set(this.closedDates.map(c => c.date));
+      const dates = Array.from(new Set(this.regularSlots.map(r => r.date)))
+        .filter(d => !closed.has(d)).sort();
       return OIA.groupIntoWeeks(dates);
     },
     currentMonthState() {
@@ -391,6 +403,18 @@ const app = createApp({
       const list = this.regularSlots.filter(r => r.id !== updated.id);
       list.push(updated);
       this.regularSlots = list;
+      await this.showSync(updated.slot_sync, "grid");
+    },
+    // A plan change came back with a slot-sync summary (null when the month
+    // has no slots yet, i.e. nothing to sync). Only shown when it did
+    // something, or when something was held back.
+    async showSync(summary, where) {
+      if (!summary) return;
+      if (summary.created || summary.removed || summary.kept.length) {
+        this.sync = summary;
+        this.syncWhere = where;
+      }
+      if (summary.created || summary.removed) await this.loadSlotCount();
     },
 
     async populateMonth(resync) {
@@ -408,6 +432,7 @@ const app = createApp({
           : "Added " + res.created + " missing cell(s)." +
             (this.staleCount ? " " + this.staleCount + " still differ — use Re-sync to apply those." : "");
         this.regularSlots = await OIA.api.get("/api/admin/months/" + this.monthId + "/regular-slots");
+        await this.showSync(res.slot_sync, "grid");
       } catch (e) {
         this.populateMessage = e.message;
       } finally { this.busy = false; }
@@ -461,6 +486,11 @@ const app = createApp({
             ? "Now " + res.state + "."
             : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
         }
+        if (res.slots_built) {
+          this.monthMessage += " No slots existed yet, so " + res.slots_built.created +
+            " were built from the plan first.";
+          await this.loadSlotCount();
+        }
       } catch (e) {
         this.monthMessage = e.message;
         await this.loadMonths();
@@ -469,9 +499,10 @@ const app = createApp({
     async addClosedDate() {
       this.monthMessage = "";
       try {
-        await OIA.api.post("/api/admin/months/" + this.monthId + "/closed-dates", this.newClosedDate);
+        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/closed-dates", this.newClosedDate);
         this.newClosedDate = { date: "", reason: "" };
         await this.loadMonthDetail();
+        await this.showSync(res.slot_sync, "setup");
       } catch (e) {
         this.monthMessage = e.message === "date_already_closed"
           ? "That date is already closed." : e.message;
@@ -480,8 +511,9 @@ const app = createApp({
     async removeClosedDate(id) {
       this.monthMessage = "";
       try {
-        await OIA.api.del("/api/admin/closed-dates/" + id);
+        const res = await OIA.api.del("/api/admin/closed-dates/" + id);
         await this.loadMonthDetail();
+        await this.showSync(res.slot_sync, "setup");
       } catch (e) { this.monthMessage = e.message; }
     },
     async saveSelectionWindow() {
@@ -493,23 +525,58 @@ const app = createApp({
         this.monthMessage = "Selection window saved.";
       } catch (e) { this.monthMessage = e.message; }
     },
-    async generateSlots(regenerate) {
-      if (regenerate && !confirm(
-          "Regenerate deletes " + this.currentMonthYm + "'s existing slots and every availability " +
-          "tick students have made against them, then rebuilds from the pattern. Continue?")) {
-        return;
-      }
+    async generateSlots() {
       this.busy = true; this.genMessage = "";
       try {
-        const res = await OIA.api.post(
-          "/api/admin/months/" + this.monthId + "/generate-slots", { regenerate: !!regenerate });
-        this.genMessage = "Created " + res.created + " slots.";
+        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/generate-slots");
         await this.loadSlotCount();
+        if (!res.created && !res.removed && !res.kept.length) {
+          this.genMessage = "Slots already match the plan — nothing to change.";
+        }
+        await this.showSync(res, "build");
       } catch (e) {
         this.genMessage = (e.payload && e.payload.message) || e.message;
       } finally { this.busy = false; }
     },
   },
+});
+// What a slot sync just did — shown next to whichever change caused it.
+// Amber when there's something to act on: students whose picks were dropped
+// (tell them), or hours held back because they're in use (sort those out).
+app.component("sync-note", {
+  props: { s: { type: Object, required: true } },
+  emits: ["dismiss"],
+  computed: {
+    needsAction() { return this.s.lost_picks.length > 0 || this.s.kept.length > 0; },
+    headline() {
+      const parts = [];
+      if (this.s.created) parts.push("added " + this.s.created + " slot" + (this.s.created === 1 ? "" : "s"));
+      if (this.s.removed) parts.push("removed " + this.s.removed + " slot" + (this.s.removed === 1 ? "" : "s"));
+      return parts.length ? "Slots updated — " + parts.join(", ") + "." : "No slots changed.";
+    },
+    lostText() {
+      return "Their picks on removed hours were dropped — let them know: " +
+        this.s.lost_picks.map(p => p.student + " (" + p.hours + "h)").join(", ") + ".";
+    },
+  },
+  methods: {
+    keptText(k) {
+      return k.date.slice(5) + " " + k.hour + ":00" + (k.student ? " · " + k.student : "") + " — " + k.reason;
+    },
+  },
+  template: `
+    <div class="statusline" :class="needsAction ? 'is-shut' : 'is-open'" style="margin-top:10px;">
+      <strong v-text="headline"></strong>
+      <span v-if="s.lost_picks.length" v-text="lostText"></span>
+      <div v-if="s.kept.length" style="flex-basis:100%;">
+        Kept, because they're in use — sort these out first (e.g. change the assignment on the
+        Draft page), then click Update slots:
+        <ul style="padding-left:18px; margin-top:4px;">
+          <li v-for="k in s.kept" :key="k.date + '_' + k.hour" class="mono" v-text="keptText(k)"></li>
+        </ul>
+      </div>
+      <button class="secondary" type="button" @click="$emit('dismiss')">Dismiss</button>
+    </div>`,
 });
 OIA.registerGlobals(app);
 app.mount("#regular-app");

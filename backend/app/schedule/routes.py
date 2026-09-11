@@ -2,7 +2,7 @@ from flask import jsonify, request
 
 from app.schedule import bp
 from app.extensions import db
-from app.models import Month, Schedule, Assignment, Slot, Availability, Student
+from app.models import Month, Schedule, Assignment, Slot, Availability, Student, ReopenedSlot
 from app.schedule.solver import solve_month
 from app.utils.decorators import overseer_required, login_required_api
 from app.utils.settings import get_solver_weights, get_floor_hours
@@ -125,11 +125,24 @@ def team_schedule(month_id):
     if schedule:
         for a in Assignment.query.filter_by(schedule_id=schedule.id).all():
             assignment_by_slot[a.slot_id] = a
+    # "Open" for a student means claimable — on the Open Shifts board right
+    # now — not merely "nobody's on it". An hour whose offer was retracted, or
+    # that was never advertised, has nothing to claim, so it mustn't read as
+    # open here while the Open Shifts tab (rightly) doesn't list it.
+    on_offer = {
+        r.slot_id for r in ReopenedSlot.query.filter(
+            ReopenedSlot.slot_id.in_([s.id for s in slots]),
+            ReopenedSlot.claimed_by.is_(None),
+            ReopenedSlot.retracted_at.is_(None),
+        ).all()
+    } if slots else set()
     return jsonify({
         "month_id": month_id,
         "students": {s.id: s.to_dict() for s in Student.query.filter_by(is_active=True).all()},
         "slots": [
-            {"slot": s.to_dict(), "assignment": assignment_by_slot[s.id].to_dict() if s.id in assignment_by_slot else None}
+            {"slot": s.to_dict(),
+             "assignment": assignment_by_slot[s.id].to_dict() if s.id in assignment_by_slot else None,
+             "open_shift": s.id in on_offer}
             for s in slots
         ],
     })

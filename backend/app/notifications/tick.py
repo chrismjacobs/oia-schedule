@@ -15,11 +15,14 @@ from datetime import datetime, timedelta, date
 from flask import current_app
 
 from app.extensions import db
-from app.models import Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession, ReopenedSlot
+from app.models import (
+    Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession, SessionHour, ReopenedSlot,
+)
 from app.notifications.service import (
     notify_selection_open, notify_closing_warning, notify_no_show, notify_slot_open,
     retry_failed,
 )
+from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.utils.tz import local_now
 
 
@@ -47,6 +50,13 @@ def _auto_advance_selection_windows(now):
             # A month someone already pushed to committed shouldn't be dragged
             # back to selection_open just because its opens_at rolled around.
             if month.state == "setup":
+                # Never announce an open month students can't pick anything
+                # in: if nobody built the slots, build them from the plan now.
+                if not month_has_slots(month):
+                    built = sync_month_slots(month)
+                    current_app.logger.info(
+                        "window OPEN | %s had no slots — built %d from the plan",
+                        month.year_month, built["created"])
                 month.state = "selection_open"
                 db.session.commit()
                 notify_selection_open(month)
@@ -93,6 +103,40 @@ def _start_committed_months(now):
     return {"months_started": started}
 
 
+def _signed_in_for(assignment):
+    """Whether the student has signed in for the run this hour belongs to —
+    at any time, late included. The reminder says "hasn't signed in yet", so
+    once they have, it has nothing left to say (lateness shows on the
+    dashboard instead).
+
+    Tied to the run, not just "any session that day": a morning session
+    must not silence the reminder for an afternoon block. A finished session
+    has recorded its run's hours (SessionHour, written at sign-out); a
+    session still open has recorded nothing yet, so check which run it's
+    covering."""
+    # Imported here: attendance.routes imports the notification service.
+    from app.attendance.routes import _todays_assignments, _run_for_session
+
+    slot = assignment.slot
+    sessions = AttendanceSession.query.filter_by(
+        student_id=assignment.student_id, date=slot.date).all()
+    if not sessions:
+        return False
+    recorded = SessionHour.query.filter(
+        SessionHour.slot_id == slot.id,
+        SessionHour.session_id.in_([s.id for s in sessions]),
+    ).first()
+    if recorded:
+        return True
+    open_sessions = [s for s in sessions if s.signed_out_at is None]
+    if open_sessions:
+        day = _todays_assignments(assignment.student_id, slot.date)
+        for s in open_sessions:
+            if any(a.slot_id == slot.id for a in _run_for_session(day, s)):
+                return True
+    return False
+
+
 def _check_no_shows(now):
     """Scheduled but not signed in, past slot start + grace (CLAUDE.md #8, #11)."""
     grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
@@ -125,12 +169,7 @@ def _check_no_shows(now):
         slot_start = datetime.combine(slot.date, datetime.min.time()).replace(hour=slot.hour)
         if now < slot_start + grace:
             continue
-        session_covers = AttendanceSession.query.filter(
-            AttendanceSession.student_id == a.student_id,
-            AttendanceSession.date == slot.date,
-            AttendanceSession.signed_in_at <= slot_start + grace,
-        ).first()
-        if session_covers:
+        if _signed_in_for(a):
             continue
         # Named here as well as in the message, so a no-show for a student who
         # shouldn't be on the roster any more is traceable to its assignment.

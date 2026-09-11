@@ -1,4 +1,4 @@
-from flask import jsonify, request
+from flask import jsonify, request, session, current_app
 from flask_login import login_user, logout_user, current_user
 
 from app.auth import bp
@@ -77,6 +77,7 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({"error": "invalid_credentials"}), 401
     db.session.commit()  # check_password may have re-stored a legacy hash
+    session.pop("impersonator_id", None)  # a real login is never a "log in as"
     login_user(user, remember=True)
     return jsonify(user.to_dict())
 
@@ -84,8 +85,29 @@ def login():
 @bp.post("/logout")
 @login_required_api
 def logout():
+    session.pop("impersonator_id", None)
     logout_user()
     return jsonify({"ok": True})
+
+
+@bp.post("/return-to-overseer")
+@login_required_api
+def return_to_overseer():
+    """End an overseer's "Log in as" (admin.login_as_student): switch the
+    session back to the overseer recorded when it started. Only that signed
+    session value can bring someone back to an overseer account, and it must
+    still be one."""
+    overseer_id = session.pop("impersonator_id", None)
+    if not overseer_id:
+        return jsonify({"error": "not_impersonating"}), 400
+    overseer = db.session.get(User, overseer_id)
+    if not overseer or overseer.role != "overseer":
+        logout_user()
+        return jsonify({"error": "overseer_gone"}), 403
+    current_app.logger.info("login-as END | back to overseer %s (was user %s)",
+                            overseer.id, current_user.id)
+    login_user(overseer)
+    return jsonify({"ok": True, "redirect": "/dashboard"})
 
 
 @bp.get("/me")

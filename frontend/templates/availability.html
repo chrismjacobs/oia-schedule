@@ -10,6 +10,8 @@
     <template v-else>
       <p class="hint" v-if="!windowOpen">Selection window is closed 選填時段目前未開放</p>
       <p>[[ selected.size ]] hours selected · greyed cells aren't offered (closed day or not a working hour)</p>
+      <p class="hint"><strong>Shifts are 2–4 hours</strong> within a morning or an afternoon — pick hours in
+        blocks. A single hour on its own is unlikely to be scheduled. 班次為連續 2–4 小時，請以時段區塊勾選。</p>
       <p class="hint">
         <span style="display:inline-block; width:10px; height:10px; background:#E7F0EB; border-left:2px solid var(--ok); vertical-align:middle;"></span> your regular hours ·
         <span style="display:inline-block; width:10px; height:10px; background:var(--open-bg); border-left:2px solid var(--open); vertical-align:middle;"></span> someone else's regular slot (probably covered) ·
@@ -52,7 +54,15 @@
           </table>
         </div>
       </template>
-      <button style="margin:14px 16px 0;" v-bind:disabled="!windowOpen || saving" v-on:click="save">Save my hours 儲存我的時段</button>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin:14px 16px 0;">
+        <button v-bind:disabled="!windowOpen || saving" v-on:click="save">Save my hours 儲存我的時段</button>
+        <button class="secondary" v-bind:disabled="!windowOpen || saving || (noHours && !selected.size)"
+                v-on:click="saveNoHours">No hours this month 本月不排班</button>
+      </div>
+      <div class="statusline" v-if="noHours && !selected.size" style="margin:10px 16px 0;">
+        <strong>You've said you're not available this month.</strong>
+        <span class="hint">You won't be scheduled. Changed your mind? Pick hours above and save.</span>
+      </div>
       <p class="hint" style="margin:6px 16px 0;">[[ saveMsg ]]</p>
     </template>
   </section>
@@ -68,7 +78,7 @@ const app = createApp({
   data() {
     return {
       month: null, dates: [], cells: [], selected: new Set(),
-      windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false,
+      windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false, noHours: false,
       loadingLastMonth: false, lastMonthMsg: "", HOURS,
     };
   },
@@ -98,6 +108,7 @@ const app = createApp({
       this.dates = res.dates;
       this.cells = res.cells;
       this.windowOpen = res.window_open;
+      this.noHours = res.no_hours;
       this.selected = new Set(res.cells.filter(c => c.selected).map(c => c.slot_id));
     } finally {
       this.loading = false;
@@ -173,7 +184,28 @@ const app = createApp({
       this.saving = true; this.saveMsg = "";
       try {
         await OIA.api.put("/api/availability/" + this.month.id, { slot_ids: Array.from(this.selected) });
+        if (this.selected.size) this.noHours = false;  // hours replace "no hours"
         this.saveMsg = "Saved.";
+      } finally {
+        this.saving = false;
+      }
+    },
+    // "I'm not available this month" — an answer in its own right, so the
+    // sign-in page stops reminding them. Clears any hours they'd ticked.
+    async saveNoHours() {
+      if (this.selected.size && !confirm(
+          "This clears the " + this.selected.size + " hour(s) you've selected and tells the office " +
+          "you're not available this month. Continue?")) {
+        return;
+      }
+      this.saving = true; this.saveMsg = "";
+      try {
+        await OIA.api.post("/api/availability/" + this.month.id + "/no-hours");
+        this.selected = new Set();
+        this.noHours = true;
+        this.saveMsg = "Saved — no hours this month.";
+      } catch (e) {
+        this.saveMsg = e.message;
       } finally {
         this.saving = false;
       }

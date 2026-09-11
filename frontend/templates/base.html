@@ -39,6 +39,15 @@
 {% endif %}
 
 <div class="wrap {{ 'wide' if wide_page }}">
+  {% if current_user.is_authenticated and session.get('impersonator_id') %}
+  {# An overseer's "Log in as" (Dashboard → Students). Always on screen so it
+     can't be forgotten: everything done here is recorded as the student. #}
+  <div class="impersonation-bar" role="status">
+    <span>Logged in as <strong>{{ current_user.student.display_name() if current_user.student else current_user.username }}</strong>
+      — anything you do here (sign-in, leave, claiming shifts) is recorded as them.</span>
+    <button type="button" data-return-overseer>Return to overseer</button>
+  </div>
+  {% endif %}
   <header class="app-header">
     <div class="titlerow">
       <div style="display:flex; align-items:center; gap:8px;">

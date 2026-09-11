@@ -18,6 +18,8 @@
               <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
               <td class="row-actions">
                 <button class="secondary" v-on:click="startEdit(s)">[[ editingId === s.id ? 'Close' : 'Edit' ]]</button>
+                <button class="secondary" v-if="s.has_account" v-bind:disabled="busy" v-on:click="loginAs(s)"
+                        v-bind:title="'See the app as ' + (s.english_name || s.chinese_name) + ' — no password needed'">Log in as</button>
                 <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
                 <a v-bind:href="'/student-history?student_id=' + s.id" class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none;">History</a>
               </td>
@@ -285,6 +287,16 @@ const app = createApp({
       } catch (e) {
         this.inviteError = this.fieldError(e);
       } finally { this.busy = false; }
+    },
+    async loginAs(s) {
+      this.busy = true;
+      try {
+        const res = await OIA.api.post("/api/admin/students/" + s.id + "/login-as");
+        window.location.href = res.redirect || "/";
+      } catch (e) {
+        alert((e.payload && e.payload.message) || e.message);
+        this.busy = false;
+      }
     },
     async toggleStudentActive(s) {
       await OIA.api.patch("/api/admin/students/" + s.id, { is_active: !s.is_active });

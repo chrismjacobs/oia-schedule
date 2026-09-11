@@ -180,8 +180,14 @@ def advertise_slot():
     taken without going through a LeaveRequest, an hour that was never meant
     to be staffed but now needs someone, or pushing a never-filled slot live
     now instead of waiting for /tick's lookahead window. Takes either a
-    slot_id or a bare (month_id, date, hour) for a cell with no Slot yet."""
+    slot_id or a bare (month_id, date, hour) for a cell with no Slot yet.
+
+    announce=false opens it quietly: on the Open Shifts board, claimable as
+    usual, but no LINE message — for when the overseer already knows who'll
+    take it (e.g. the original student is working after all) and a group
+    broadcast would only invite a race for it."""
     data = request.get_json(force=True) or {}
+    announce = bool(data.get("announce", True))
     slot, err = _resolve_or_create_slot(data)
     if err:
         return err
@@ -210,8 +216,9 @@ def advertise_slot():
     db.session.add(reopened)
     db.session.flush()
     db.session.commit()
-    notify_slot_open(reopened)
-    return jsonify(_open_slot_payload(reopened)), 201
+    if announce:
+        notify_slot_open(reopened)
+    return jsonify(dict(_open_slot_payload(reopened), announced=announce)), 201
 
 
 @bp.delete("/reopened/<int:reopened_id>")

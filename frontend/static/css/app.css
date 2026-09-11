@@ -47,6 +47,14 @@ a { color: var(--accent); }
 .wrap { max-width: 640px; margin: 0 auto; }
 .wrap.wide { max-width: 980px; }
 
+/* ---------- "Log in as" banner (overseer viewing as a student) ---------- */
+.impersonation-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 16px; font-size: 13px;
+  background: var(--warn-bg); color: var(--warn); border-bottom: 2px solid var(--warn);
+}
+.impersonation-bar button { background: var(--warn); border-color: var(--warn); font-size: 12px; padding: 6px 12px; }
+
 /* ---------- Header ---------- */
 
 header.app-header {
@@ -291,6 +299,7 @@ td.reg-cell.day-past::after {
   background: rgba(238, 240, 239, .62);
 }
 .day-tag { font-size: 10px; font-weight: 500; }
+.day-tag.warn { color: var(--warn); font-weight: 700; }
 .weeklabel.week-past { color: var(--ink-3); }
 .sched-name-only { font-size: 12px; font-weight: 600; color: var(--ink-2); }
 
@@ -310,7 +319,18 @@ td.reg-cell.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
 .icon-btn:hover { color: var(--accent); background: var(--rule-2); opacity: 1; }
 .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 .adv-btn { opacity: .55; }
-.adv-btn:hover { opacity: 1; }
+.adv-btn:hover, .adv-btn[aria-expanded="true"] { opacity: 1; }
+
+/* The 📢 choice: announce on LINE, or open quietly. Fixed-position (placed
+   from the icon's screen position in JS) so the grid's scroll box can't clip it. */
+.adv-menu {
+  position: fixed; z-index: 40; width: 210px;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(28, 37, 48, .14);
+}
+.adv-menu-title { font-size: 11px; color: var(--ink-3); padding: 0 2px; }
+.adv-menu button { font-size: 12px; padding: 7px 10px; text-align: left; }
 
 /* ---------- Student "My Schedule": mine in one standard green — the same for
    every student, since on this page the reader already knows who they are, so a
@@ -370,6 +390,7 @@ button, .btn {
   border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
 }
 button:hover, .btn:hover { opacity: .92; }
+a.btn { display: inline-block; text-decoration: none; }
 button.secondary, .btn.secondary { background: var(--card); color: var(--accent); border-color: var(--rule); }
 button.danger { background: #fff; color: #B3261E; border-color: #E3B3AE; }
 button:disabled { opacity: .5; cursor: not-allowed; }
@@ -421,6 +442,13 @@ table.data td.row-actions { white-space: nowrap; }
 .buildstep .hint { margin-top: 2px; }
 
 table.data td.row-actions > * + * { margin-left: 6px; }
+
+/* A checkbox with a sentence beside it, inside a panel. */
+label.check-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  text-transform: none; letter-spacing: 0; font-weight: normal; font-size: 13px; color: var(--ink);
+}
+label.check-row input { width: auto; }
 
 /* Colour × shape picker in the student edit form — each choice is drawn as
    the token it would produce. */

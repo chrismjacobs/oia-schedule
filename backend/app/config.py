@@ -72,13 +72,35 @@ class Config:
     SOLVER_FLOOR_HOURS = int(os.environ.get("SOLVER_FLOOR_HOURS", 4))
 
     # Solver objective weights, labelled & tunable (CLAUDE.md #6). Higher priority
-    # items use larger weights so they dominate lower-priority ones.
+    # items use larger weights so they dominate lower-priority ones. The solver
+    # picks whole sessions (see schedule/solver.py), so these read per hour
+    # (coverage, floor, churn) or per session (the three session costs).
     SOLVER_WEIGHTS = {
-        "coverage": int(os.environ.get("SOLVER_W_COVERAGE", 1000)),
-        "floor_guarantee": int(os.environ.get("SOLVER_W_FLOOR", 500)),
-        "contiguity": int(os.environ.get("SOLVER_W_CONTIGUITY", 20)),
-        "low_churn": int(os.environ.get("SOLVER_W_LOW_CHURN", 10)),
+        "coverage": int(os.environ.get("SOLVER_W_COVERAGE", 1000)),        # per hour filled
+        "floor_guarantee": int(os.environ.get("SOLVER_W_FLOOR", 500)),     # per hour below the floor
+        # Per hour a session falls short of the minimum length. Above the
+        # floor weight, so a short session is only ever used to cover an hour
+        # nobody else can — never just to top someone up.
+        "short_session": int(os.environ.get("SOLVER_W_SHORT_SESSION", 600)),
+        # Per session: prefers one 4h shift to two 2h shifts over the same hours.
+        "per_session": int(os.environ.get("SOLVER_W_PER_SESSION", 150)),
+        # Per student-day with both a morning and an afternoon session.
+        "same_day_double": int(os.environ.get("SOLVER_W_SAME_DAY_DOUBLE", 100)),
+        "low_churn": int(os.environ.get("SOLVER_W_LOW_CHURN", 10)),        # per week-to-week pattern change
         "equalise_hours": int(os.environ.get("SOLVER_W_EQUALISE", 1)),
+    }
+
+    # The shape of a shift. A session is one unbroken run of hours inside a
+    # morning or an afternoon (never across lunch).
+    SOLVER_SESSION_RULES = {
+        "min_hours": int(os.environ.get("SOLVER_SESSION_MIN_HOURS", 2)),
+        "max_hours": int(os.environ.get("SOLVER_SESSION_MAX_HOURS", 4)),
+        # Sessions shorter than min_hours: allowed only as a last resort
+        # (penalised by short_session) when on, never when off.
+        "short_as_last_resort": _bool("SOLVER_SHORT_AS_LAST_RESORT", True),
+        # Morning and afternoon for the same student on one day: allowed but
+        # discouraged (same_day_double) when on, never when off.
+        "allow_same_day_double": _bool("SOLVER_ALLOW_SAME_DAY_DOUBLE", True),
     }
 
     # Timecard upload cadence default (CLAUDE.md #10)

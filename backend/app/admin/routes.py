@@ -1,20 +1,22 @@
 from datetime import datetime, date as date_cls
 from uuid import uuid4
 
-from flask import jsonify, request, current_app
+from flask import jsonify, request, current_app, session
+from flask_login import current_user, login_user
 
 from app.admin import bp
 from app.extensions import db
 from app.models import (
-    Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
-    RegularSlotTemplate, RegularSlot, Schedule, Assignment, Availability, ReopenedSlot,
+    Semester, Student, User, Month, ClosedDate, SelectionWindow,
+    RegularSlotTemplate, RegularSlot,
     SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
     STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES,
     USERNAME_RE, normalize_username,
 )
 from app.utils.decorators import overseer_required
-from app.utils.settings import get_setting, set_setting
+from app.utils.settings import get_setting, set_setting, get_solver_weights, get_session_rules
 from app.utils.periods import weekdays_in_month
+from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
@@ -100,6 +102,29 @@ def list_students():
         d["username"] = s.user.username if s.user else None
         out.append(d)
     return jsonify(out)
+
+
+@bp.post("/students/<int:student_id>/login-as")
+@overseer_required
+def login_as_student(student_id):
+    """Switch this browser session to the student's account, no password —
+    so the overseer can see exactly what that student sees. The overseer's
+    own id is kept in the (signed) session, which is what the banner's
+    "Return to overseer" uses to switch back; nothing else can set it.
+
+    Not a remembered login: if the session ends, the browser falls back to
+    the overseer's own remember-me login, never to the student's."""
+    student = Student.query.get_or_404(student_id)
+    account = student.user
+    if not account:
+        return jsonify({"error": "no_account",
+                        "message": "This student has no login account"}), 400
+    overseer_id = current_user.id
+    current_app.logger.info("login-as START | overseer %s -> student %s (%s, user %s)",
+                            overseer_id, student.id, student.short_name, account.id)
+    login_user(account, remember=False)
+    session["impersonator_id"] = overseer_id
+    return jsonify({"ok": True, "redirect": "/"})
 
 
 def _check_username(raw, exclude_user_id=None):
@@ -306,6 +331,12 @@ def update_month_state(month_id):
     if new_state == "closed" and was != "closed":
         report = build_month_dashboard(month)
 
+    # Opening selection on a month with no slots would show students an
+    # all-grey grid right after announcing it — build them from the plan first.
+    slots_built = None
+    if new_state == "selection_open" and not month_has_slots(month):
+        slots_built = sync_month_slots(month)
+
     month.state = new_state
     db.session.commit()
 
@@ -323,6 +354,7 @@ def update_month_state(month_id):
     out["was_forward_step"] = (new_state == MONTH_FORWARD.get(was))
     out["closeout_report"] = report
     out["announced"] = announced
+    out["slots_built"] = slots_built
     return jsonify(out)
 
 
@@ -339,7 +371,6 @@ def list_closed_dates(month_id):
 @bp.post("/months/<int:month_id>/closed-dates")
 @overseer_required
 def add_closed_date(month_id):
-    from flask_login import current_user
     month = Month.query.get_or_404(month_id)
     data = request.get_json(force=True) or {}
     date_str = data.get("date")
@@ -350,17 +381,33 @@ def add_closed_date(month_id):
         return jsonify({"error": "date_already_closed"}), 409
     cd = ClosedDate(month_id=month.id, date=d, reason=data.get("reason"), set_by=current_user.id)
     db.session.add(cd)
+    db.session.flush()
+    # Closing a day takes its slots with it straight away, so students can't
+    # go on ticking it and the solver can't staff it (see utils/slot_sync).
+    sync = _sync_if_built(month)
     db.session.commit()
-    return jsonify(cd.to_dict()), 201
+    return jsonify(dict(cd.to_dict(), slot_sync=sync)), 201
 
 
 @bp.delete("/closed-dates/<int:closed_date_id>")
 @overseer_required
 def delete_closed_date(closed_date_id):
     cd = ClosedDate.query.get_or_404(closed_date_id)
+    month = cd.month
     db.session.delete(cd)
+    db.session.flush()
+    sync = _sync_if_built(month)  # reopening the day gives it its slots back
     db.session.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "slot_sync": sync})
+
+
+def _sync_if_built(month):
+    """After a plan change: bring the slots in line — but only once the month
+    has slots at all. Before that, the plan is still being drawn up and
+    building slots is its own deliberate step."""
+    if month is None or not month_has_slots(month):
+        return None
+    return sync_month_slots(month)
 
 
 # ---------------- Selection window ----------------
@@ -493,8 +540,10 @@ def populate_regular_slots(month_id):
             elif resync and (row.state, row.student_id) != (state, student_id):
                 row.state, row.student_id = state, student_id
                 updated += 1
+    db.session.flush()
+    sync = _sync_if_built(month)
     db.session.commit()
-    return jsonify({"created": created, "updated": updated, "resync": resync}), 201
+    return jsonify({"created": created, "updated": updated, "resync": resync, "slot_sync": sync}), 201
 
 
 @bp.get("/months/<int:month_id>/regular-slots")
@@ -518,8 +567,10 @@ def update_regular_slot(regular_slot_id):
         return jsonify({"error": "student_id_required"}), 400
     row.state = state
     row.student_id = student_id
+    db.session.flush()
+    sync = _sync_if_built(row.month)
     db.session.commit()
-    return jsonify(row.to_dict())
+    return jsonify(dict(row.to_dict(), slot_sync=sync))
 
 
 # ---------------- Slot generation ----------------
@@ -527,64 +578,21 @@ def update_regular_slot(regular_slot_id):
 @bp.post("/months/<int:month_id>/generate-slots")
 @overseer_required
 def generate_slots(month_id):
-    """Turn this month's regular_slot plan into the Slot rows students
-    actually select against.
+    """Build this month's slots from its plan, or bring existing ones back in
+    line with it. The same call does both — see utils/slot_sync.
 
-    Re-runnable (regenerate=true): the pattern legitimately changes during
-    setup, and being one-shot meant a month generated from a wrong pattern
-    was stuck with it forever. Regenerating throws away the month's slots and
-    everything hanging off them — availability included — so it is refused
-    once a schedule is committed, where that would delete a live roster."""
+    Every hour of every open weekday gets a slot, except hours the month's
+    regular schedule marks unavailable (not every hour needs staffing); cells
+    with no regular_slot row (populate never run) just get a slot.
+
+    There used to be a separate "Regenerate" that deleted the whole month's
+    slots and every student's selections to apply any change. Sync replaces
+    it: it only touches hours whose place in the plan changed."""
     month = Month.query.get_or_404(month_id)
-    regenerate = bool((request.get_json(silent=True) or {}).get("regenerate"))
-    existing = Slot.query.filter_by(month_id=month.id).all()
-
-    if existing and not regenerate:
-        return jsonify({"error": "slots_already_generated",
-                        "message": f"{len(existing)} slots already exist. "
-                                   "Regenerate to rebuild them from the pattern."}), 409
-
-    if existing:
-        committed = Schedule.query.filter_by(month_id=month.id, status="committed").first()
-        if committed:
-            return jsonify({"error": "schedule_committed",
-                            "message": "This month's schedule is committed — regenerating "
-                                       "would delete the published roster."}), 409
-        slot_ids = [s.id for s in existing]
-        n_avail = Availability.query.filter(Availability.slot_id.in_(slot_ids)).delete(
-            synchronize_session=False)
-        Assignment.query.filter(Assignment.slot_id.in_(slot_ids)).delete(synchronize_session=False)
-        ReopenedSlot.query.filter(ReopenedSlot.slot_id.in_(slot_ids)).delete(synchronize_session=False)
-        Schedule.query.filter_by(month_id=month.id).delete(synchronize_session=False)
-        Slot.query.filter(Slot.id.in_(slot_ids)).delete(synchronize_session=False)
-        year_month = month.year_month
-        # Settle the deletes before rebuilding, and drop the deleted rows from
-        # the identity map: on SQLite the new slots reuse the freed primary
-        # keys, which otherwise collide with the stale objects still mapped.
-        db.session.commit()
-        db.session.expunge_all()
-        month = Month.query.get_or_404(month_id)  # re-attach after expunge
-        current_app.logger.info("regenerate slots for %s: dropped %d slots, %d availability",
-                                year_month, len(slot_ids), n_avail)
-
-    # Any (date, hour) already marked unavailable in this month's regular
-    # schedule never gets a Slot at all — coverage need varies month to
-    # month, not every hour needs staffing (CLAUDE.md discussion). Cells with
-    # no regular_slot row (feature unused, or populate never run) fall back
-    # to plain slot generation exactly as before.
-    regular_by_key = {(r.date, r.hour): r for r in RegularSlot.query.filter_by(month_id=month.id).all()}
-
-    created = 0
-    for d in _month_weekdays_minus_closed(month):
-        for hour in SLOT_HOURS:
-            reg = regular_by_key.get((d, hour))
-            if reg and reg.state == "unavailable":
-                continue
-            period = "morning" if hour < 12 else "afternoon"
-            db.session.add(Slot(month_id=month.id, date=d, hour=hour, period=period, state="open"))
-            created += 1
+    summary = sync_month_slots(month)
     db.session.commit()
-    return jsonify({"created": created}), 201
+    current_app.logger.info("slot sync for %s: %s", month.year_month, summary)
+    return jsonify(summary), 201
 
 
 # ---------------- Monthly close-out (CLAUDE.md #5 state 8, #18 build step 13) ----------------
@@ -634,7 +642,8 @@ def reset_demo_route():
 def get_settings():
     from flask import current_app
     return jsonify({
-        "solver_weights": get_setting("solver_weights", dict(current_app.config["SOLVER_WEIGHTS"])),
+        "solver_weights": get_solver_weights(),
+        "solver_session_rules": get_session_rules(),
         "solver_floor_hours": get_setting("solver_floor_hours", current_app.config["SOLVER_FLOOR_HOURS"]),
         "timecard_cadence": get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"]),
         "notify_attendance_events": get_setting("notify_attendance_events", True),
@@ -649,7 +658,18 @@ def get_settings():
 def put_settings():
     data = request.get_json(force=True) or {}
     if "solver_weights" in data:
-        set_setting("solver_weights", data["solver_weights"])
+        set_setting("solver_weights", {k: int(v) for k, v in data["solver_weights"].items()})
+    if "solver_session_rules" in data:
+        rules = data["solver_session_rules"]
+        lo, hi = int(rules.get("min_hours", 2)), int(rules.get("max_hours", 4))
+        if not 1 <= lo <= hi:
+            return jsonify({"error": "invalid_session_rules",
+                            "message": "Session hours: 1 ≤ minimum ≤ maximum"}), 400
+        set_setting("solver_session_rules", {
+            "min_hours": lo, "max_hours": hi,
+            "short_as_last_resort": bool(rules.get("short_as_last_resort", True)),
+            "allow_same_day_double": bool(rules.get("allow_same_day_double", True)),
+        })
     if "solver_floor_hours" in data:
         set_setting("solver_floor_hours", int(data["solver_floor_hours"]))
     if "timecard_cadence" in data:
