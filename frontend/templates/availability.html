@@ -6,6 +6,7 @@
     <h2>Select your available hours <span class="hint">選填可上班時段</span></h2>
 
     <p v-if="loading" class="hint">Loading…</p>
+    <div class="panel error-text" v-else-if="loadError">[[ loadError ]]</div>
     <div class="panel" v-else-if="!month">No month is currently open for selection.</div>
     <template v-else>
       <p class="hint" v-if="!windowOpen">Selection window is closed 選填時段目前未開放</p>
@@ -78,7 +79,7 @@ const app = createApp({
   data() {
     return {
       month: null, dates: [], cells: [], selected: new Set(),
-      windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false, noHours: false,
+      windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false, noHours: false, loadError: "",
       loadingLastMonth: false, lastMonthMsg: "", HOURS,
     };
   },
@@ -110,6 +111,10 @@ const app = createApp({
       this.windowOpen = res.window_open;
       this.noHours = res.no_hours;
       this.selected = new Set(res.cells.filter(c => c.selected).map(c => c.slot_id));
+    } catch (e) {
+      // Say so, rather than leaving a blank page that looks like "no hours".
+      this.loadError = "Couldn't load your hours (" + e.message + "). Try again in a moment, " +
+        "and tell the office if it keeps happening.";
     } finally {
       this.loading = false;
     }

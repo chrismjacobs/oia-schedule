@@ -2,6 +2,17 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <div id="dash-app" v-cloak>
+  <!-- While a month is open for selection: who has answered, at a glance.
+       The full breakdown is at the top of Draft review. -->
+  <a class="statusline" v-if="selection" v-bind:href="'/draft?month=' + selection.month.id"
+     v-bind:class="selection.summary.not_answered ? 'is-shut' : 'is-open'"
+     style="margin:10px 16px 0; text-decoration:none;">
+    <strong>[[ selection.month.year_month ]] selection: [[ selection.summary.answered + selection.summary.no_hours ]]
+      of [[ selection.summary.students ]] answered</strong>
+    <span v-if="selection.summary.not_answered">· [[ selection.summary.not_answered ]] not yet</span>
+    <span v-if="selection.summary.regular_need_cover">· [[ selection.summary.regular_need_cover ]] regular hour(s) need cover</span>
+    <span>→ Draft review</span>
+  </a>
   <div class="panel" style="margin-top:10px;">
     <h2>Students 學生</h2>
     <div class="table-scroll">
@@ -194,6 +205,7 @@ const app = createApp({
       // One student is edited at a time, in a form under their row, behind an
       // explicit Edit button — so a stray click or tab can't change a name.
       editingId: null, draft: {}, editError: "",
+      selection: null,  // selection-progress summary for the month open for selection, if any
       PALETTE, SHAPES, WORKER_TYPES,
     };
   },
@@ -205,6 +217,8 @@ const app = createApp({
       const preferred = this.months.find(m => m.state === "running") || this.months[0];
       this.monthId = preferred.id;
     }
+    const open = this.months.find(m => m.state === "selection_open");
+    if (open) this.selection = await OIA.api.get("/api/admin/months/" + open.id + "/selection-progress");
   },
   methods: {
     async load() {

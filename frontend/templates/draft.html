@@ -16,6 +16,49 @@
     <p class="hint">[[ message ]]</p>
   </section>
 
+  <!-- Who has answered for this month, and with what — the thing to watch
+       while selection is open, and the context for the draft afterwards. -->
+  <section class="pad" v-if="progress && showProgress">
+    <div class="panel" style="margin:0 0 12px;">
+      <h2>Selection progress <span class="hint">選填進度 · [[ progress.month.year_month ]] · [[ progress.month.state ]]</span></h2>
+      <div class="statusline" v-bind:class="progress.summary.not_answered ? 'is-shut' : 'is-open'">
+        <strong>[[ progress.summary.answered + progress.summary.no_hours ]] of [[ progress.summary.students ]] answered</strong>
+        <span v-if="progress.summary.not_answered">· [[ progress.summary.not_answered ]] not yet</span>
+        <span v-if="progress.summary.no_hours">· [[ progress.summary.no_hours ]] no hours this month</span>
+        <span v-if="progress.summary.regular_need_cover">· <b>[[ progress.summary.regular_need_cover ]] regular hour[[ progress.summary.regular_need_cover === 1 ? '' : 's' ]] need cover</b></span>
+        <span class="hint" v-if="progress.closes_at && progress.month.state === 'selection_open'">· closes [[ formatDateTime(progress.closes_at) ]]</span>
+      </div>
+      <div class="table-scroll" style="margin-top:10px;">
+        <table class="data">
+          <thead><tr>
+            <th>Student</th><th>Answer</th><th>Regular</th><th>Regular confirmed</th>
+            <th>Extra offered</th><th>Total offered</th><th>Last saved</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="r in progress.rows" v-bind:key="r.student.id">
+              <td><span style="display:inline-flex; align-items:center; gap:6px;">
+                <oia-token v-bind:student="r.student" size="sm"></oia-token>
+                [[ r.student.chinese_name ]] [[ r.student.english_name ]]</span></td>
+              <td><span class="badge" v-bind:class="ANSWER_BADGE[r.answer][1]">[[ ANSWER_BADGE[r.answer][0] ]]</span></td>
+              <td class="mono">[[ r.regular_hours || '—' ]]</td>
+              <td class="mono">
+                <template v-if="r.regular_confirmed === null || !r.regular_hours">—</template>
+                <template v-else>[[ r.regular_confirmed ]]<span class="badge warn" style="margin-left:6px;"
+                  v-if="r.regular_need_cover">[[ r.regular_need_cover ]] need cover</span></template>
+              </td>
+              <td class="mono">[[ r.extra_offered ? '+' + r.extra_offered : '—' ]]</td>
+              <td class="mono">[[ r.total_offered || '—' ]]</td>
+              <td class="mono hint">[[ r.last_saved ? formatDateTime(r.last_saved) : '—' ]]</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:8px;">Regular = their standing hours in this month's plan. A regular hour left
+        unticked by someone who has answered is free — it needs cover; one belonging to someone who hasn't
+        answered is still undecided.</p>
+    </div>
+  </section>
+
   <section class="pad" v-if="payload">
     <template v-for="(week, wi) in weeks" v-bind:key="wi">
       <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
@@ -53,10 +96,16 @@
 <script>
 const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
+const ANSWER_BADGE = {
+  not_answered: ["Not answered", "warn"],
+  no_hours: ["No hours this month", "uncovered"],
+  answered: ["Answered", "ok"],
+};
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
-    return { months: [], monthId: null, payload: null, busy: false, message: "", narrow: false, HOURS };
+    return { months: [], monthId: null, payload: null, busy: false, message: "", narrow: false, HOURS,
+             progress: null, ANSWER_BADGE };
   },
   computed: {
     rowsByKey() {
@@ -70,12 +119,23 @@ const app = createApp({
       this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
       return OIA.groupIntoWeeks(dates);
     },
+    // From selection opening until the schedule is committed — after that
+    // the dashboard's scheduled-vs-recorded is what matters.
+    showProgress() {
+      return ["selection_open", "selection_closed", "review"].includes(this.progress && this.progress.month.state);
+    },
   },
-  watch: { monthId() { this.loadPayload(); } },
+  watch: { monthId() { this.loadPayload(); this.loadProgress(); } },
   async mounted() {
     OIA.watchNarrow((v) => { this.narrow = v; });
     this.months = await OIA.api.get("/api/admin/months");
-    const preferred = this.months.find(m => m.state === "review") || this.months[0];
+    // ?month=<id> (the Dashboard's selection line links here), else the month
+    // being reviewed, else the one open for selection, else the newest.
+    const asked = Number(new URLSearchParams(window.location.search).get("month"));
+    const preferred = this.months.find(m => m.id === asked)
+      || this.months.find(m => m.state === "review")
+      || this.months.find(m => m.state === "selection_open" || m.state === "selection_closed")
+      || this.months[0];
     if (preferred) this.monthId = preferred.id;
   },
   methods: {
@@ -105,6 +165,14 @@ const app = createApp({
       if (!this.monthId) return;
       this.payload = await OIA.api.get("/api/schedule/months/" + this.monthId);
     },
+    async loadProgress() {
+      if (!this.monthId) return;
+      this.progress = await OIA.api.get("/api/admin/months/" + this.monthId + "/selection-progress");
+    },
+    // "2026-09-25T17:00:00" -> "Fri 09-25 17:00"
+    formatDateTime(iso) {
+      return OIA.weekdayLabel(iso.slice(0, 10)) + " " + iso.slice(5, 10) + " " + iso.slice(11, 16);
+    },
     async generateDraft() {
       this.busy = true; this.message = "";
       try {
@@ -117,7 +185,7 @@ const app = createApp({
           (m.sessions ? " in " + m.sessions + " sessions (" + lengths + ")" : "") + "." +
           (m.regular_not_honoured ? " " + m.regular_not_honoured + " regular hour(s) couldn't be kept." : "");
         this.months = await OIA.api.get("/api/admin/months");
-        await this.loadPayload();
+        await Promise.all([this.loadPayload(), this.loadProgress()]);
       } catch (e) {
         this.message = e.message;
       } finally {
@@ -138,6 +206,7 @@ const app = createApp({
         await OIA.api.post("/api/schedule/months/" + this.monthId + "/commit");
         this.message = "Committed.";
         this.months = await OIA.api.get("/api/admin/months");
+        await this.loadProgress();
       } catch (e) {
         this.message = e.message;
       } finally {

@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, date as date_cls
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from app.admin import bp
 from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow,
-    RegularSlotTemplate, RegularSlot,
+    RegularSlotTemplate, RegularSlot, Slot, Availability, AvailabilityOptOut,
     SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
     STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES,
     USERNAME_RE, normalize_username,
@@ -571,6 +572,89 @@ def update_regular_slot(regular_slot_id):
     sync = _sync_if_built(row.month)
     db.session.commit()
     return jsonify(dict(row.to_dict(), slot_sync=sync))
+
+
+# ---------------- Selection progress (who has answered for a month) ----------------
+
+@bp.get("/months/<int:month_id>/selection-progress")
+@overseer_required
+def selection_progress(month_id):
+    """Per student, while availability is open (and after): have they
+    answered, how many of their regular hours they confirmed, how many extra
+    hours they offered. Shown at the top of Draft review — the page the
+    overseer builds the schedule from once everyone has answered.
+
+    "Regular hours" counts only regular hours that exist as slots this month
+    (a closed day or an hour made unavailable isn't one). A regular hour left
+    unticked by someone who HAS answered is confirmed free — it needs cover;
+    one belonging to someone who hasn't answered yet is still undecided."""
+    month = Month.query.get_or_404(month_id)
+    slots = Slot.query.filter_by(month_id=month.id).all()
+    slot_id_by_key = {(s.date, s.hour): s.id for s in slots}
+    month_slot_ids = list(slot_id_by_key.values())
+
+    regular = defaultdict(set)   # student -> {slot_id} of their regular hours
+    for r in RegularSlot.query.filter_by(month_id=month.id, state="assigned").all():
+        slot_id = slot_id_by_key.get((r.date, r.hour))
+        if r.student_id and slot_id:
+            regular[r.student_id].add(slot_id)
+
+    offered = defaultdict(set)
+    last_saved = {}
+    if month_slot_ids:
+        for a in Availability.query.filter(Availability.slot_id.in_(month_slot_ids)).all():
+            offered[a.student_id].add(a.slot_id)
+            if a.student_id not in last_saved or a.submitted_at > last_saved[a.student_id]:
+                last_saved[a.student_id] = a.submitted_at
+    opted_out = {}
+    for o in AvailabilityOptOut.query.filter_by(month_id=month.id).all():
+        opted_out[o.student_id] = o.created_at
+
+    # The live roster, plus anyone this month already involves (e.g. someone
+    # deactivated after answering) — never silently drop an answer.
+    involved = set(regular) | set(offered) | set(opted_out)
+    students = Student.query.filter(
+        db.or_(db.and_(Student.is_active.is_(True), Student.is_demo.is_(False)),
+               Student.id.in_(involved) if involved else db.false())
+    ).all()
+
+    rows = []
+    for s in students:
+        mine_regular, mine_offered = regular.get(s.id, set()), offered.get(s.id, set())
+        if mine_offered:
+            answer = "answered"
+        elif s.id in opted_out:
+            answer = "no_hours"
+        else:
+            answer = "not_answered"
+        confirmed = len(mine_regular & mine_offered)
+        saved_at = last_saved.get(s.id) or opted_out.get(s.id)
+        rows.append({
+            "student": s.to_dict(),
+            "answer": answer,
+            "regular_hours": len(mine_regular),
+            "regular_confirmed": confirmed if answer != "not_answered" else None,
+            "regular_need_cover": len(mine_regular) - confirmed if answer != "not_answered" else None,
+            "extra_offered": len(mine_offered - mine_regular),
+            "total_offered": len(mine_offered),
+            "last_saved": saved_at.isoformat() if saved_at else None,
+        })
+    order = {"not_answered": 0, "no_hours": 1, "answered": 2}
+    rows.sort(key=lambda r: (order[r["answer"]], (r["student"]["english_name"] or r["student"]["chinese_name"]).lower()))
+
+    window = SelectionWindow.query.filter_by(month_id=month.id).first()
+    return jsonify({
+        "month": month.to_dict(),
+        "closes_at": window.closes_at.isoformat() if window and window.closes_at else None,
+        "summary": {
+            "students": len(rows),
+            "answered": sum(r["answer"] == "answered" for r in rows),
+            "no_hours": sum(r["answer"] == "no_hours" for r in rows),
+            "not_answered": sum(r["answer"] == "not_answered" for r in rows),
+            "regular_need_cover": sum(r["regular_need_cover"] or 0 for r in rows),
+        },
+        "rows": rows,
+    })
 
 
 # ---------------- Slot generation ----------------
