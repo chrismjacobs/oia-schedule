@@ -60,17 +60,56 @@
   }
 
   // ---------------- week-by-week grouping (Regular / Draft / merged schedule grid) ----------------
-  // Splits a sorted list of "YYYY-MM-DD" weekday strings into weeks, starting
-  // a new group at each Monday. The first/last week of a month can be a
-  // partial 1-4 day week — that's expected, not a bug.
+  function parseDate(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  function isoDate(dt) {
+    return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+  }
+  function addDays(dateStr, n) {
+    const dt = parseDate(dateStr);
+    dt.setDate(dt.getDate() + n);
+    return isoDate(dt);
+  }
+  // The Monday of the week a date falls in.
+  function mondayOf(dateStr) { return addDays(dateStr, -mondayWeekday(dateStr)); }
+
+  // Splits a sorted list of "YYYY-MM-DD" weekday strings into weeks — a new
+  // group whenever the calendar week changes. (Not "at each Monday": when a
+  // Monday is a closed date it isn't in the list, and the rest of its week
+  // would otherwise get tacked onto the week before.) The first/last week of
+  // a month can be a partial 1-4 day week — that's expected, not a bug.
   function groupIntoWeeks(dates) {
     const out = [];
     let cur = [];
+    let curMonday = null;
     dates.forEach((d) => {
-      if (weekdayIndex(d) === 1 && cur.length) { out.push(cur); cur = []; }
+      const monday = mondayOf(d);
+      if (monday !== curMonday && cur.length) { out.push(cur); cur = []; }
+      curMonday = monday;
       cur.push(d);
     });
     if (cur.length) out.push(cur);
+    return out;
+  }
+
+  // Every week touching a month, each a full Mon–Fri list of date strings —
+  // including days that spill over into the previous/next month, so every
+  // week has the same five columns. Callers mark the spill-over days.
+  function monthWeeks(yearMonth) {
+    const first = yearMonth + "-01";
+    const lastDt = parseDate(first);
+    lastDt.setMonth(lastDt.getMonth() + 1, 0);
+    const last = isoDate(lastDt);
+    // Start from the month's first weekday so a month opening on a weekend
+    // doesn't begin with a week that's entirely last month.
+    let start = first;
+    while (mondayWeekday(start) > 4) start = addDays(start, 1);
+    const out = [];
+    for (let monday = mondayOf(start); monday <= last; monday = addDays(monday, 7)) {
+      out.push([0, 1, 2, 3, 4].map((i) => addDays(monday, i)));
+    }
     return out;
   }
 
@@ -149,6 +188,6 @@
 
   window.OIA = {
     api, bilingual, shapeSVG, weekdayLabel, registerGlobals,
-    groupIntoWeeks, watchNarrow, shortName, hourLabel, stateLabel, mondayWeekday,
+    groupIntoWeeks, monthWeeks, watchNarrow, shortName, hourLabel, stateLabel, mondayWeekday,
   };
 })();

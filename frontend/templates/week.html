@@ -14,23 +14,26 @@
   <section class="pad" v-if="!payload"><p class="hint">Loading…</p></section>
 
   <template v-else>
-    <section class="pad" v-if="!visibleWeeks.length"><p class="hint">This month is over — nothing left to show.</p></section>
-
-    <template v-for="(week, wi) in visibleWeeks" v-bind:key="wi">
-      <div class="weeklabel">Week [[ weekNumber(week) ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
+    <template v-for="(week, wi) in weeks" v-bind:key="wi">
+      <div class="weeklabel" v-bind:class="{ 'week-past': weekPast(week) }">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
       <div class="weekwrap">
         <table class="grid">
           <thead>
             <tr>
               <th class="h">時 / hr</th>
-              <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+              <th v-for="d in week" v-bind:key="d" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)">
+                [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
+                <span class="day-tag" v-if="dayKind(d) === 'closed'"><br>[[ narrow ? 'cl' : 'closed' ]]</span>
+              </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ hourLabel(h) ]]</td>
-              <td v-for="d in week" v-bind:key="d + '_' + h"
-                  class="reg-cell" v-bind:class="cellClass(d, h)" v-bind:style="cellStyle(d, h)"
+              <template v-for="d in week" v-bind:key="d + '_' + h">
+              <td v-if="dayKind(d) !== 'work'" class="reg-cell" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)"></td>
+              <td v-else
+                  class="reg-cell" v-bind:class="[cellClass(d, h), dayClass(d)]" v-bind:style="cellStyle(d, h)"
                   v-bind:title="cellTitle(d, h)">
                 <span class="sched-cell" v-if="row(d, h) && row(d, h).student">
                   <oia-token v-bind:student="row(d, h).student" size="sm"></oia-token>
@@ -59,13 +62,15 @@
                 </button>
                 <span class="leave-pin" v-if="row(d, h) && row(d, h).pending_leave"></span>
               </td>
+              </template>
             </tr>
           </tbody>
         </table>
       </div>
     </template>
     <div class="weeknote">colour + shape = one student at a glance · amber ring = leave requested, not yet approved ·
-      📢 advertises an empty hour on Open Shifts, ✕ pulls it back · past weeks are hidden</div>
+      hatched = unassigned · solid grey = unavailable (no slot) ·
+      📢 advertises an empty hour on Open Shifts, ✕ pulls it back · days already past and days outside this month are greyed out</div>
     <p class="error-text pad" v-if="message">[[ message ]]</p>
 
     <div class="roster">
@@ -99,21 +104,18 @@ const app = createApp({
       return map;
     },
     weeks() {
-      // Built from the month's working calendar, not from the slots that
-      // happen to exist: an hour the regular schedule marked unavailable has
-      // no Slot behind it, but it still needs a cell so it can be advertised
-      // if the need comes up.
+      // Built from the month's calendar, not from the slots that happen to
+      // exist: an hour the regular schedule marked unavailable has no Slot
+      // behind it, but it still needs a cell so it can be advertised if the
+      // need comes up. Every week is a full Mon–Fri — the days that spill
+      // into the neighbouring month, and closed days, are drawn greyed.
       if (!this.payload) return [];
-      return OIA.groupIntoWeeks(this.payload.dates || []);
+      return OIA.monthWeeks(this.payload.year_month);
     },
+    workingDates() { return new Set(this.payload ? this.payload.dates : []); },
     todayStr() {
       const d = new Date();
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    },
-    visibleWeeks() {
-      // A week that has fully ended (its last day is before today) is just
-      // noise for the overseer's live view — drop it.
-      return this.weeks.filter(week => week[week.length - 1] >= this.todayStr);
     },
   },
   watch: {
@@ -138,7 +140,25 @@ const app = createApp({
     cellKey(date, hour) { return date + "_" + hour; },
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
-    weekNumber(week) { return this.weeks.indexOf(week) + 1; },
+    // 'work' = a working day of this month, 'closed' = a closed date of this
+    // month, 'out' = spill-over into the previous/next month.
+    dayKind(d) {
+      if (d.slice(0, 7) !== this.payload.year_month) return "out";
+      return this.workingDates.has(d) ? "work" : "closed";
+    },
+    // Past days stay on the grid — the overseer can still look back over the
+    // month — but greyed so the live part stands out.
+    dayClass(d) {
+      const kind = this.dayKind(d);
+      return { "day-out": kind === "out", "day-closed": kind === "closed", "day-past": d < this.todayStr };
+    },
+    dayTitle(d) {
+      const kind = this.dayKind(d);
+      if (kind === "out") return "Not part of this month";
+      if (kind === "closed") return "Closed" + (this.payload.closed[d] ? " — " + this.payload.closed[d] : "");
+      return null;
+    },
+    weekPast(week) { return week[week.length - 1] < this.todayStr; },
     studentLabel(s) {
       const name = s.english_name || s.chinese_name;
       return this.narrow ? OIA.shortName(name) : name;

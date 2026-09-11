@@ -9,7 +9,7 @@ from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
     RegularSlotTemplate, RegularSlot, Schedule, Assignment, Availability, ReopenedSlot,
     SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
-    STUDENT_ID_RE, STUDENT_ID_MAX,
+    STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
@@ -138,6 +138,43 @@ def update_student(student_id):
                             "message": "Another student already has that ID"}), 409
         new_student_id = raw
 
+    # Names are safe to correct: every history row (assignments, sessions,
+    # leave, task completions) points at the student's internal id, never at
+    # the name or the student ID, and reports are built live — so a rename
+    # simply shows everywhere, past months included.
+    new_names = {}
+    for field in ("chinese_name", "english_name"):
+        if field in data:
+            raw = (data[field] or "").strip()
+            if len(raw) > 64:
+                return jsonify({"error": "name_too_long",
+                                "message": "Names are limited to 64 characters"}), 400
+            new_names[field] = raw
+    if new_names:
+        zh = new_names.get("chinese_name", student.chinese_name)
+        en = new_names.get("english_name", student.english_name)
+        if not zh and not en:
+            return jsonify({"error": "name_required",
+                            "message": "Provide at least one of Chinese/English name"}), 400
+
+    # Token override (CLAUDE.md §15: the overseer can change a colour if two
+    # look close). Kept to the managed palette and shapes, and unique within
+    # the semester — the DB constraint would reject a clash anyway, but as a
+    # 500 rather than a message.
+    colour = data.get("colour", student.colour)
+    shape = data.get("shape", student.shape)
+    if "colour" in data or "shape" in data:
+        if ("colour" in data and colour not in STUDENT_PALETTE) or ("shape" in data and shape not in STUDENT_SHAPES):
+            return jsonify({"error": "invalid_token",
+                            "message": "Pick a colour and shape from the palette"}), 400
+        clash = Student.query.filter(
+            Student.semester_id == student.semester_id, Student.colour == colour,
+            Student.shape == shape, Student.id != student.id,
+        ).first()
+        if clash:
+            return jsonify({"error": "token_taken",
+                            "message": f"{clash.short_name} already has that colour and shape"}), 409
+
     new_insurance = None
     if "insurance_number" in data:
         # Free text: the insurer's format isn't ours to police, and a wrong
@@ -149,16 +186,15 @@ def update_student(student_id):
                             "message": "Insurance number is limited to 32 characters"}), 400
         new_insurance = raw or None
 
+    for field, value in new_names.items():
+        setattr(student, field, value)
     if new_student_id is not None:
         student.student_id = new_student_id
     if "insurance_number" in data:
         student.insurance_number = new_insurance
     if "is_active" in data:
         student.is_active = bool(data["is_active"])
-    if "colour" in data:
-        student.colour = data["colour"]
-    if "shape" in data:
-        student.shape = data["shape"]
+    student.colour, student.shape = colour, shape
 
     db.session.commit()
     out = student.to_dict()

@@ -17,6 +17,7 @@
   --warn-bg: #FBF1E3;
   --open: #94A0A9;        /* uncovered */
   --open-bg: #F1F3F2;
+  --unavail-bg: #CBD2D7;  /* unavailable (no slot) — solid, clearly darker than the uncovered hatch */
   --ok: #4B7A63;          /* recorded ok, muted */
   --urgent: #C0392B;      /* regular slot confirmed declined — redder than --warn, deliberately close to "open" */
   --urgent-bg: #FBEAE7;
@@ -242,7 +243,11 @@ table.grid tbody tr:nth-child(5) td { border-top: 2px solid var(--ink-2); }
 
 /* ---------- Regular schedule grid (standing slots) ---------- */
 td.reg-cell { height: 44px; padding: 0; }
-td.reg-cell.reg-unavailable, td.reg-cell.no-eligible { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
+/* Unavailable is a solid darker grey so it can't be mistaken for the light
+   hatch that means "unassigned / nobody offered". */
+td.reg-cell.reg-unavailable { background: var(--unavail-bg); }
+td.reg-cell.reg-unavailable select { color: var(--ink); }
+td.reg-cell.no-eligible { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
 td.reg-cell select {
   width: 100%; height: 44px; border: none; background: transparent; font-size: 11px;
   text-align: center; text-align-last: center; color: var(--ink-2); cursor: pointer;
@@ -267,10 +272,26 @@ td.reg-cell.sched-flagged { background: var(--warn-bg); }
 td.reg-cell.sched-recorded { background: #E7F0EB; }
 td.reg-cell.sched-advertised { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--warn-bg) 5px, var(--warn-bg) 10px); }
 /* Uncovered = the mockup's muted grey + hatch. An hour with no Slot behind it
-   at all (never meant to be staffed this month) is quieter still — flat, no
-   hatch — but still offers the advertise icon, since the need can change. */
+   at all (unavailable — never meant to be staffed this month) is a solid
+   darker grey, so the two never read alike — but it still offers the
+   advertise icon, since the need can change. */
 td.reg-cell.sched-uncovered { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
-td.reg-cell.sched-noslot { background: var(--open-bg); }
+td.reg-cell.sched-noslot { background: var(--unavail-bg); }
+td.reg-cell.sched-noslot .adv-btn { color: var(--ink-2); }
+
+/* Greyed days. Days spilling into the neighbouring month (so every week is a
+   full Mon–Fri) and closed days are blank; past days keep their content but
+   sit under a paper-coloured veil, so the live part of the month stands out
+   while the overseer can still look back. */
+table.grid th.day-out, table.grid th.day-closed, table.grid th.day-past { color: var(--ink-3); font-weight: 500; }
+table.grid th.day-out { opacity: .6; }
+td.reg-cell.day-out, td.reg-cell.day-closed { background: var(--paper); }
+td.reg-cell.day-past::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: rgba(238, 240, 239, .62);
+}
+.day-tag { font-size: 10px; font-weight: 500; }
+.weeklabel.week-past { color: var(--ink-3); }
 .sched-name-only { font-size: 12px; font-weight: 600; color: var(--ink-2); }
 
 /* Leave requested, not yet approved — an amber ring plus a corner dot, both
@@ -399,18 +420,16 @@ table.data td.row-actions { white-space: nowrap; }
 .buildstep strong { font-size: 13px; }
 .buildstep .hint { margin-top: 2px; }
 
-/* Inline-editable field inside a table row (student ID, insurance number on
-   the dashboard) — reads as a value until you touch it, not as a form. */
-td.edit-cell { white-space: nowrap; }
-td.edit-cell input {
-  width: auto; min-width: 0; padding: 5px 7px; font-size: 12.5px;
-  border-color: transparent; background: var(--rule-2);
-}
-td.edit-cell input:hover { border-color: var(--rule); }
-td.edit-cell input:focus { border-color: var(--accent); background: var(--card); }
-.save-flag { font-size: 10.5px; color: var(--ok); margin-left: 6px; }
-.save-flag.bad { color: #B3261E; }
 table.data td.row-actions > * + * { margin-left: 6px; }
+
+/* Colour × shape picker in the student edit form — each choice is drawn as
+   the token it would produce. */
+.token-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+button.token-choice {
+  display: inline-grid; place-items: center; padding: 5px; line-height: 0;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 8px; cursor: pointer;
+}
+button.token-choice.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 
 /* A file input dressed as a secondary button (upload controls inside table rows). */
 label.file-btn {

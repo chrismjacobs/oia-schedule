@@ -247,14 +247,19 @@ def month_grid(month_id):
     never gets a Slot generated, but it can still turn out to need cover, so
     the grid draws every working day and every hour and lets the overseer
     advertise any empty cell — /api/leave/advertise makes the Slot on
-    demand."""
+    demand.
+
+    `closed` (date -> reason) lets the grid still draw a closed day as a
+    greyed column, so every week keeps its full Mon–Fri shape."""
     month = Month.query.get_or_404(month_id)
     slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
-    closed = {c.date for c in ClosedDate.query.filter_by(month_id=month_id).all()}
+    closed = {c.date: c.reason for c in ClosedDate.query.filter_by(month_id=month_id).all()}
     dates = [d.isoformat() for d in weekdays_in_month(month.year_month) if d not in closed]
     return jsonify({
         "month_id": month_id,
+        "year_month": month.year_month,
         "students": {s.id: s.to_dict() for s in Student.query.filter_by(is_active=True).all()},
         "dates": dates,
+        "closed": {d.isoformat(): reason for d, reason in closed.items()},
         "slots": _slot_status_rows(slots),
     })

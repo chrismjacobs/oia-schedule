@@ -8,33 +8,64 @@
       <table class="data">
         <thead><tr><th>Name</th><th>ID</th><th>Insurance 勞保</th><th>Token</th><th>Active</th><th></th></tr></thead>
         <tbody>
-          <tr v-for="s in students" v-bind:key="s.id">
-            <td>[[ s.chinese_name ]] [[ s.english_name ]] <span class="badge uncovered" v-if="s.is_demo">demo</span></td>
-            <td class="edit-cell">
-              <input class="mono" v-model="s.student_id" placeholder="ID"
-                     maxlength="32" size="12"
-                     v-bind:disabled="saving === key(s, 'student_id')"
-                     v-bind:aria-label="'Student ID for ' + (s.english_name || s.chinese_name)"
-                     v-on:change="saveField(s, 'student_id')" v-on:keyup.enter="$event.target.blur()">
-              <span class="save-flag" v-if="flags[key(s, 'student_id')]"
-                    v-bind:class="{ bad: flags[key(s, 'student_id')] !== 'saved' }">[[ flags[key(s, 'student_id')] ]]</span>
-            </td>
-            <td class="edit-cell">
-              <input class="mono" v-model="s.insurance_number" placeholder="—"
-                     maxlength="32" size="15"
-                     v-bind:disabled="saving === key(s, 'insurance_number')"
-                     v-bind:aria-label="'Insurance number for ' + (s.english_name || s.chinese_name)"
-                     v-on:change="saveField(s, 'insurance_number')" v-on:keyup.enter="$event.target.blur()">
-              <span class="save-flag" v-if="flags[key(s, 'insurance_number')]"
-                    v-bind:class="{ bad: flags[key(s, 'insurance_number')] !== 'saved' }">[[ flags[key(s, 'insurance_number')] ]]</span>
-            </td>
-            <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
-            <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
-            <td>
-              <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
-              <a v-bind:href="'/student-history?student_id=' + s.id" class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none; margin-left:4px;">History</a>
-            </td>
-          </tr>
+          <template v-for="s in students" v-bind:key="s.id">
+            <tr>
+              <td>[[ s.chinese_name ]] [[ s.english_name ]] <span class="badge uncovered" v-if="s.is_demo">demo</span></td>
+              <td class="mono">[[ s.student_id ]]</td>
+              <td class="mono">[[ s.insurance_number || '—' ]]</td>
+              <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
+              <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
+              <td class="row-actions">
+                <button class="secondary" v-on:click="startEdit(s)">[[ editingId === s.id ? 'Close' : 'Edit' ]]</button>
+                <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
+                <a v-bind:href="'/student-history?student_id=' + s.id" class="secondary" style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none;">History</a>
+              </td>
+            </tr>
+            <tr v-if="editingId === s.id">
+              <td colspan="6" class="edit-row">
+                <form v-on:submit.prevent="saveStudent(s)" v-on:keydown.esc="editingId = null">
+                  <div class="field-row">
+                    <div class="field"><label>Chinese name 中文姓名</label><input v-model="draft.chinese_name" maxlength="64"></div>
+                    <div class="field"><label>English name</label><input v-model="draft.english_name" maxlength="64"></div>
+                  </div>
+                  <div class="field-row">
+                    <div class="field"><label>Student ID 學號</label>
+                      <input class="mono" v-model="draft.student_id" maxlength="32" required
+                             pattern="[A-Za-z0-9]+" title="Letters and numbers only"></div>
+                    <div class="field"><label>Insurance 勞保</label>
+                      <input class="mono" v-model="draft.insurance_number" maxlength="32" placeholder="—"></div>
+                  </div>
+                  <div class="field">
+                    <label>Token colour</label>
+                    <div class="token-picker">
+                      <button type="button" v-for="c in PALETTE" v-bind:key="c"
+                              class="token-choice" v-bind:class="{ on: draft.colour === c }"
+                              v-bind:aria-pressed="draft.colour === c" v-bind:aria-label="'Colour ' + c"
+                              v-on:click="draft.colour = c">
+                        <oia-token v-bind:student="{ colour: c, shape: draft.shape }" size="sm"></oia-token>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label>Token shape</label>
+                    <div class="token-picker">
+                      <button type="button" v-for="sh in SHAPES" v-bind:key="sh"
+                              class="token-choice" v-bind:class="{ on: draft.shape === sh }"
+                              v-bind:aria-pressed="draft.shape === sh" v-bind:aria-label="'Shape ' + sh"
+                              v-on:click="draft.shape = sh">
+                        <oia-token v-bind:student="{ colour: draft.colour, shape: sh }" size="sm"></oia-token>
+                      </button>
+                    </div>
+                    <p class="error-text" v-if="tokenOwner(s)">[[ tokenOwner(s) ]] already has this colour and shape.</p>
+                  </div>
+                  <p class="hint" style="margin-bottom:8px;">Past records follow the student, not the name or ID — a correction here shows on every past schedule, session and report.</p>
+                  <p class="error-text" v-if="editError" style="margin-bottom:8px;">[[ editError ]]</p>
+                  <button type="submit" v-bind:disabled="busy || !!tokenOwner(s)">Save changes</button>
+                  <button type="button" class="secondary" v-on:click="editingId = null">Cancel</button>
+                </form>
+              </td>
+            </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -127,17 +158,18 @@
 {% block page_script %}
 <script>
 const { createApp } = Vue;
+const PALETTE = {{ palette|tojson }};
+const SHAPES = {{ shapes|tojson }};
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
       months: [], monthId: null, data: null, loading: false,
       students: [], inviteEmail: "", inviteResult: null, busy: false,
-      // Student ID and insurance number save on blur rather than behind a
-      // Save button — they're single values transcribed off a form, and a
-      // per-cell flag is enough feedback that it landed. `originals` lets a
-      // rejected edit snap back to what the server actually holds.
-      saving: null, flags: {}, originals: {},
+      // One student is edited at a time, in a form under their row, behind an
+      // explicit Edit button — so a stray click or tab can't change a name.
+      editingId: null, draft: {}, editError: "",
+      PALETTE, SHAPES,
     };
   },
   watch: { monthId() { this.load(); } },
@@ -165,47 +197,53 @@ const app = createApp({
     },
     async loadStudents() {
       this.students = await OIA.api.get("/api/admin/students");
-      const snap = {};
-      this.students.forEach(s => {
-        snap[s.id] = { student_id: s.student_id, insurance_number: s.insurance_number };
+    },
+    startEdit(s) {
+      if (this.editingId === s.id) { this.editingId = null; return; }
+      this.editingId = s.id;
+      this.editError = "";
+      this.draft = {
+        chinese_name: s.chinese_name || "", english_name: s.english_name || "",
+        student_id: s.student_id || "", insurance_number: s.insurance_number || "",
+        colour: s.colour, shape: s.shape,
+      };
+    },
+    // Someone else in the same semester already wearing the draft's
+    // colour × shape — tokens must stay unique, so saving is blocked.
+    tokenOwner(s) {
+      const clash = this.students.find(o => o.id !== s.id && o.semester_id === s.semester_id
+        && o.colour === this.draft.colour && o.shape === this.draft.shape);
+      return clash ? (clash.english_name || clash.chinese_name) : "";
+    },
+    async saveStudent(s) {
+      const d = this.draft;
+      if (!d.chinese_name.trim() && !d.english_name.trim()) {
+        this.editError = "Give at least a Chinese or an English name.";
+        return;
+      }
+      // Send only what changed, so an untouched field can never be the one
+      // that fails validation.
+      const changes = {};
+      ["chinese_name", "english_name", "student_id", "insurance_number", "colour", "shape"].forEach(f => {
+        if ((d[f] || "").trim() !== (s[f] || "")) changes[f] = (d[f] || "").trim();
       });
-      this.originals = snap;
-    },
-    key(s, field) { return s.id + ":" + field; },
-    setFlag(k, text) { this.flags = Object.assign({}, this.flags, { [k]: text }); },
-    clearFlag(k) {
-      const next = Object.assign({}, this.flags);
-      delete next[k];
-      this.flags = next;
-    },
-    async saveField(s, field) {
-      const k = this.key(s, field);
-      const original = (this.originals[s.id] || {})[field] || null;
-      if ((s[field] || null) === original) { this.clearFlag(k); return; }
+      if (!Object.keys(changes).length) { this.editingId = null; return; }
 
-      this.saving = k;
-      this.setFlag(k, "saving…");
+      this.busy = true; this.editError = "";
       try {
-        const updated = await OIA.api.patch("/api/admin/students/" + s.id,
-          { [field]: s[field] || "" });
-        s[field] = updated[field];
-        this.originals[s.id][field] = updated[field];
-        this.setFlag(k, "saved");
-        setTimeout(() => this.clearFlag(k), 1800);
+        const updated = await OIA.api.patch("/api/admin/students/" + s.id, changes);
+        Object.assign(s, updated);
+        this.editingId = null;
       } catch (e) {
-        // Put the field back to what the server holds, so the row never sits
-        // there showing a value that wasn't accepted.
-        s[field] = original;
-        this.setFlag(k, this.fieldError(e));
+        this.editError = this.fieldError(e);
       } finally {
-        this.saving = null;
+        this.busy = false;
       }
     },
     fieldError(e) {
       const code = (e.payload && e.payload.error) || e.message;
-      if (code === "student_id_taken") return "ID already in use";
-      if (code === "invalid_student_id") return "letters and numbers only";
-      if (code === "insurance_number_too_long") return "too long (max 32)";
+      if (code === "student_id_taken") return "That student ID is already in use.";
+      if (code === "invalid_student_id") return "Student ID: letters and numbers only.";
       return (e.payload && e.payload.message) || e.message;
     },
     async sendInvite() {
