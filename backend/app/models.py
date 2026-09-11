@@ -29,6 +29,23 @@ STUDENT_SHAPES = ["circle", "triangle", "square", "diamond"]
 STUDENT_ID_RE = re.compile(r"^[A-Za-z0-9]+$")
 STUDENT_ID_MAX = 32
 
+# Accounts log in with a username, not an email. Usernames are
+# case-insensitive: always stored lowercased (normalize_username), so "Jian"
+# and "jian" are the same account.
+USERNAME_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
+
+
+def normalize_username(raw):
+    return (raw or "").strip().lower()
+
+# How a student is employed. Set by the overseer on the dashboard; null until
+# they do. Ordered as offered in the picker.
+WORKER_TYPES = {
+    "OW": "Official Worker",
+    "SW": "Service Worker",
+    "TA": "Teaching Assistant",
+}
+
 SLOT_HOURS = [8, 9, 10, 11, 13, 14, 15, 16]  # 1-hour slots, Mon-Fri (CLAUDE.md #4)
 
 REGULAR_SLOT_STATES = ["unavailable", "unassigned", "assigned"]
@@ -76,6 +93,7 @@ class Student(db.Model):
     # the team schedule and roster views, and this is nobody's business but the
     # overseer's. Served only by the overseer-gated /api/admin/students.
     insurance_number = db.Column(db.String(32), nullable=True)
+    worker_type = db.Column(db.String(2), nullable=True)  # a WORKER_TYPES key: OW | SW | TA
     line_user_id = db.Column(db.String(64), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)  # seeded row — "Reset demo data" deletes these
@@ -111,6 +129,7 @@ class Student(db.Model):
             "student_id": self.student_id,
             "colour": self.colour,
             "shape": self.shape,
+            "worker_type": self.worker_type,
             "is_active": self.is_active,
             "is_demo": self.is_demo,
         }
@@ -120,7 +139,7 @@ class User(UserMixin, db.Model):
     __tablename__ = "app_user"
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True, unique=True)
-    email = db.Column(db.String(128), nullable=False, unique=True)
+    username = db.Column(db.String(128), nullable=False, unique=True)  # lowercased; see USERNAME_RE
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(16), nullable=False)  # overseer | student
     invite_token = db.Column(db.String(36), nullable=True, unique=True)
@@ -129,16 +148,27 @@ class User(UserMixin, db.Model):
 
     student = db.relationship("Student", back_populates="user")
 
+    # Passwords are case-insensitive by decision: they're hashed lowercased,
+    # and whatever is typed at login is lowercased before checking.
     def set_password(self, raw):
-        self.password_hash = generate_password_hash(raw)
+        self.password_hash = generate_password_hash(raw.lower())
 
     def check_password(self, raw):
-        return check_password_hash(self.password_hash, raw)
+        if check_password_hash(self.password_hash, raw.lower()):
+            return True
+        # A hash stored before passwords went case-insensitive is of the
+        # password exactly as it was typed. Accept that exact spelling once
+        # and re-store it lowercased, so every later login is case-free. The
+        # caller commits.
+        if raw != raw.lower() and check_password_hash(self.password_hash, raw):
+            self.set_password(raw)
+            return True
+        return False
 
     def to_dict(self):
         return {
             "id": self.id,
-            "email": self.email,
+            "username": self.username,
             "role": self.role,
             "student": self.student.to_dict() if self.student else None,
         }

@@ -7,7 +7,7 @@
     <div class="field">
       <label>Invite token</label>
       <input v-model="token" v-on:change="checkInvite" required>
-      <p class="hint" v-if="inviteEmail">For: [[ inviteEmail ]]</p>
+      <p class="hint" v-if="inviteUsername">Your username: <span class="mono">[[ inviteUsername ]]</span> — you'll log in with this.</p>
       <p class="error-text" v-if="inviteError">[[ inviteError ]]</p>
     </div>
     <form v-on:submit.prevent="submit">
@@ -31,7 +31,7 @@
         <input type="password" v-model="password" minlength="8" required>
       </div>
       <p class="error-text" v-if="error">[[ error ]]</p>
-      <button type="submit" v-bind:disabled="busy || !inviteEmail">Register</button>
+      <button type="submit" v-bind:disabled="busy || !inviteUsername">Register</button>
     </form>
   </div>
 </section>
@@ -44,7 +44,7 @@ const app = createApp({
   data() {
     return {
       token: {{ invite_token | tojson }},
-      inviteEmail: "", inviteError: "",
+      inviteUsername: "", inviteError: "",
       chineseName: "", englishName: "", studentId: "", password: "",
       error: "", busy: false,
     };
@@ -54,11 +54,11 @@ const app = createApp({
   },
   methods: {
     async checkInvite() {
-      this.inviteError = ""; this.inviteEmail = "";
+      this.inviteError = ""; this.inviteUsername = "";
       if (!this.token) return;
       try {
         const info = await OIA.api.get("/api/auth/invite/" + encodeURIComponent(this.token));
-        this.inviteEmail = info.email;
+        this.inviteUsername = info.username;
       } catch (e) {
         this.inviteError = "Invite not found or already used.";
       }

@@ -35,7 +35,9 @@ class Config:
     AWS_S3_BUCKET = os.environ.get("AWS_S3_BUCKET")
     AWS_S3_REGION = os.environ.get("AWS_S3_REGION", "ap-northeast-1")
 
-    ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL")
+    # First overseer account (seed.py). Accounts use usernames, not emails;
+    # an old ADMIN_EMAIL setting still works — its part before the @ is used.
+    ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME") or (os.environ.get("ADMIN_EMAIL") or "").split("@")[0] or None
     ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
     # /tick endpoint auth (external cron pings this)

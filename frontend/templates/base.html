@@ -52,7 +52,7 @@
       <div class="header-right">
         {% if current_user.is_authenticated %}
         <div class="userline">
-          {{ current_user.email }}<br><span class="role">{{ current_user.role }}</span>
+          {{ current_user.username }}<br><span class="role">{{ current_user.role }}</span>
         </div>
         <button class="linklike" data-logout>Log out</button>
         {% endif %}

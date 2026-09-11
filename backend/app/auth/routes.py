@@ -3,7 +3,7 @@ from flask_login import login_user, logout_user, current_user
 
 from app.auth import bp
 from app.extensions import db
-from app.models import User, Student, Semester, STUDENT_ID_RE, STUDENT_ID_MAX
+from app.models import User, Student, Semester, STUDENT_ID_RE, STUDENT_ID_MAX, normalize_username
 from app.utils.identity import assign_token
 from app.utils.decorators import login_required_api
 from app.utils.tz import local_now
@@ -14,7 +14,7 @@ def get_invite(token):
     user = User.query.filter_by(invite_token=token, invite_accepted_at=None).first()
     if not user:
         return jsonify({"error": "invalid_or_used_invite"}), 404
-    return jsonify({"email": user.email, "role": user.role})
+    return jsonify({"username": user.username, "role": user.role})
 
 
 @bp.post("/register")
@@ -38,8 +38,8 @@ def register():
                                    f"up to {STUDENT_ID_MAX} characters"}), 400
     if len(password) < 8:
         return jsonify({"error": "weak_password", "message": "Password must be at least 8 characters"}), 400
-    # Case-insensitive, like the email check above: now that IDs can contain
-    # letters, "A12" and "a12" are the same person to everyone but the DB.
+    # Case-insensitive, like usernames: now that IDs can contain letters,
+    # "A12" and "a12" are the same person to everyone but the DB.
     if Student.query.filter(db.func.lower(Student.student_id) == student_id.lower()).first():
         return jsonify({"error": "student_id_taken"}), 409
 
@@ -71,11 +71,12 @@ def register():
 @bp.post("/login")
 def login():
     data = request.get_json(force=True) or {}
-    email = (data.get("email") or "").strip().lower()
+    username = normalize_username(data.get("username"))
     password = data.get("password") or ""
-    user = User.query.filter(db.func.lower(User.email) == email).first()
+    user = User.query.filter(db.func.lower(User.username) == username).first()
     if not user or not user.check_password(password):
         return jsonify({"error": "invalid_credentials"}), 401
+    db.session.commit()  # check_password may have re-stored a legacy hash
     login_user(user, remember=True)
     return jsonify(user.to_dict())
 

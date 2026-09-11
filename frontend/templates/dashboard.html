@@ -6,11 +6,12 @@
     <h2>Students 學生</h2>
     <div class="table-scroll">
       <table class="data">
-        <thead><tr><th>Name</th><th>ID</th><th>Insurance 勞保</th><th>Token</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>ID</th><th>Insurance 勞保</th><th>Token</th><th>Active</th><th></th></tr></thead>
         <tbody>
           <template v-for="s in students" v-bind:key="s.id">
             <tr>
               <td>[[ s.chinese_name ]] [[ s.english_name ]] <span class="badge uncovered" v-if="s.is_demo">demo</span></td>
+              <td v-bind:title="WORKER_TYPES[s.worker_type] || 'Not set'">[[ s.worker_type || '—' ]]</td>
               <td class="mono">[[ s.student_id ]]</td>
               <td class="mono">[[ s.insurance_number || '—' ]]</td>
               <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
@@ -22,19 +23,35 @@
               </td>
             </tr>
             <tr v-if="editingId === s.id">
-              <td colspan="6" class="edit-row">
+              <td colspan="7" class="edit-row">
                 <form v-on:submit.prevent="saveStudent(s)" v-on:keydown.esc="editingId = null">
                   <div class="field-row">
                     <div class="field"><label>Chinese name 中文姓名</label><input v-model="draft.chinese_name" maxlength="64"></div>
                     <div class="field"><label>English name</label><input v-model="draft.english_name" maxlength="64"></div>
                   </div>
                   <div class="field-row">
+                    <div class="field"><label>Worker type</label>
+                      <select v-model="draft.worker_type">
+                        <option value="">— not set —</option>
+                        <option v-for="(label, code) in WORKER_TYPES" v-bind:key="code" v-bind:value="code">[[ label ]] ([[ code ]])</option>
+                      </select></div>
                     <div class="field"><label>Student ID 學號</label>
                       <input class="mono" v-model="draft.student_id" maxlength="32" required
                              pattern="[A-Za-z0-9]+" title="Letters and numbers only"></div>
                     <div class="field"><label>Insurance 勞保</label>
                       <input class="mono" v-model="draft.insurance_number" maxlength="32" placeholder="—"></div>
                   </div>
+                  <div class="field-row" v-if="s.has_account">
+                    <div class="field"><label>Username 帳號</label>
+                      <input class="mono" v-model="draft.username" maxlength="64" required
+                             pattern="[A-Za-z0-9._\-]+" title="Letters, numbers, dot, dash or underscore"
+                             autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+                    <div class="field"><label>New password</label>
+                      <input type="text" v-model="draft.password" minlength="6"
+                             placeholder="leave blank to keep the current one"
+                             autocomplete="new-password" autocapitalize="none" spellcheck="false"></div>
+                  </div>
+                  <p class="hint" v-else style="margin-bottom:8px;">No login account — this student can't sign in (demo data, or never registered).</p>
                   <div class="field">
                     <label>Token colour</label>
                     <div class="token-picker">
@@ -70,10 +87,15 @@
       </table>
     </div>
     <form v-on:submit.prevent="sendInvite" class="field-row" style="margin-top:10px;">
-      <div class="field"><label>Invite a student (email)</label><input type="email" v-model="inviteEmail" required></div>
-      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Send invite</button></div>
+      <div class="field"><label>Invite a student (choose their username)</label>
+        <input type="text" v-model="inviteUsername" required maxlength="64"
+               pattern="[A-Za-z0-9._\-]+" title="Letters, numbers, dot, dash or underscore"
+               autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Create invite</button></div>
     </form>
-    <p class="hint" v-if="inviteResult">Invite link: <span class="mono">/register/[[ inviteResult.invite_token ]]</span></p>
+    <p class="error-text" v-if="inviteError">[[ inviteError ]]</p>
+    <p class="hint" v-if="inviteResult">Invite for <span class="mono">[[ inviteResult.username ]]</span> — pass on this link:
+      <span class="mono">/register/[[ inviteResult.invite_token ]]</span></p>
   </div>
 
   <section class="pad">
@@ -160,16 +182,17 @@
 const { createApp } = Vue;
 const PALETTE = {{ palette|tojson }};
 const SHAPES = {{ shapes|tojson }};
+const WORKER_TYPES = {{ worker_types|tojson }};
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
       months: [], monthId: null, data: null, loading: false,
-      students: [], inviteEmail: "", inviteResult: null, busy: false,
+      students: [], inviteUsername: "", inviteResult: null, inviteError: "", busy: false,
       // One student is edited at a time, in a form under their row, behind an
       // explicit Edit button — so a stray click or tab can't change a name.
       editingId: null, draft: {}, editError: "",
-      PALETTE, SHAPES,
+      PALETTE, SHAPES, WORKER_TYPES,
     };
   },
   watch: { monthId() { this.load(); } },
@@ -205,7 +228,8 @@ const app = createApp({
       this.draft = {
         chinese_name: s.chinese_name || "", english_name: s.english_name || "",
         student_id: s.student_id || "", insurance_number: s.insurance_number || "",
-        colour: s.colour, shape: s.shape,
+        worker_type: s.worker_type || "", colour: s.colour, shape: s.shape,
+        username: s.username || "", password: "",
       };
     },
     // Someone else in the same semester already wearing the draft's
@@ -224,9 +248,15 @@ const app = createApp({
       // Send only what changed, so an untouched field can never be the one
       // that fails validation.
       const changes = {};
-      ["chinese_name", "english_name", "student_id", "insurance_number", "colour", "shape"].forEach(f => {
+      ["chinese_name", "english_name", "student_id", "insurance_number", "worker_type", "colour", "shape"].forEach(f => {
         if ((d[f] || "").trim() !== (s[f] || "")) changes[f] = (d[f] || "").trim();
       });
+      if (s.has_account) {
+        // Usernames are case-insensitive — "Jian" is no change from "jian".
+        if (d.username.trim().toLowerCase() !== (s.username || "")) changes.username = d.username.trim();
+        // A blank password box means "keep the current one".
+        if (d.password.trim()) changes.password = d.password;
+      }
       if (!Object.keys(changes).length) { this.editingId = null; return; }
 
       this.busy = true; this.editError = "";
@@ -247,11 +277,13 @@ const app = createApp({
       return (e.payload && e.payload.message) || e.message;
     },
     async sendInvite() {
-      this.busy = true; this.inviteResult = null;
+      this.busy = true; this.inviteResult = null; this.inviteError = "";
       try {
-        this.inviteResult = await OIA.api.post("/api/admin/invites", { email: this.inviteEmail });
-        this.inviteEmail = "";
+        this.inviteResult = await OIA.api.post("/api/admin/invites", { username: this.inviteUsername });
+        this.inviteUsername = "";
         await this.loadStudents();
+      } catch (e) {
+        this.inviteError = this.fieldError(e);
       } finally { this.busy = false; }
     },
     async toggleStudentActive(s) {

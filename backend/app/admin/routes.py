@@ -9,7 +9,8 @@ from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow, Slot,
     RegularSlotTemplate, RegularSlot, Schedule, Assignment, Availability, ReopenedSlot,
     SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
-    STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES,
+    STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES,
+    USERNAME_RE, normalize_username,
 )
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting
@@ -25,6 +26,11 @@ from app.notifications.service import reset_notification, notify_selection_open
 # one more day, a month gets committed too early, a closed month needs
 # reopening. Blocking that left months permanently stuck with no way out, so
 # the overseer's dropdown is an explicit override and may set any state.
+# Minimum for a password the overseer sets on a student's behalf. Lower than
+# registration's 8 because the passwords already handed out (name + a few
+# digits) are shorter than that, and the overseer must be able to re-set one.
+OVERSEER_SET_PASSWORD_MIN = 6
+
 MONTH_FORWARD = {
     "setup": "selection_open",
     "selection_open": "selection_closed",
@@ -91,28 +97,45 @@ def list_students():
         # Overseer-only, so it's added here rather than in Student.to_dict(),
         # which is also what students receive in the roster/team views.
         d["insurance_number"] = s.insurance_number
+        d["username"] = s.user.username if s.user else None
         out.append(d)
     return jsonify(out)
+
+
+def _check_username(raw, exclude_user_id=None):
+    """Normalise a username and check it's usable. Returns (username, None)
+    or (None, error response)."""
+    username = normalize_username(raw)
+    if not USERNAME_RE.match(username):
+        return None, (jsonify({"error": "invalid_username",
+                               "message": "Username: letters, numbers, dot, dash or underscore, "
+                                          "up to 64 characters"}), 400)
+    q = User.query.filter(db.func.lower(User.username) == username)
+    if exclude_user_id is not None:
+        q = q.filter(User.id != exclude_user_id)
+    if q.first():
+        return None, (jsonify({"error": "username_taken",
+                               "message": "That username is already in use"}), 409)
+    return username, None
 
 
 @bp.post("/invites")
 @overseer_required
 def create_invite():
-    """Overseer sends an invite link to a prospective student's email. The
-    student fills in names/ID/password when they accept (see auth.register)."""
+    """Overseer creates an invite for a username of their choosing and passes
+    the link on. The student fills in names/ID/password when they accept
+    (see auth.register), then logs in with that username."""
     data = request.get_json(force=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "email_required"}), 400
-    if User.query.filter(db.func.lower(User.email) == email).first():
-        return jsonify({"error": "email_taken"}), 409
+    username, err = _check_username(data.get("username"))
+    if err:
+        return err
 
     token = str(uuid4())
-    user = User(email=email, role="student", invite_token=token)
+    user = User(username=username, role="student", invite_token=token)
     user.set_password(str(uuid4()))  # placeholder until registration sets a real one
     db.session.add(user)
     db.session.commit()
-    return jsonify({"email": email, "invite_token": token}), 201
+    return jsonify({"username": username, "invite_token": token}), 201
 
 
 @bp.patch("/students/<int:student_id>")
@@ -175,6 +198,35 @@ def update_student(student_id):
             return jsonify({"error": "token_taken",
                             "message": f"{clash.short_name} already has that colour and shape"}), 409
 
+    # Login details live on the student's account (app_user), not the student
+    # row — a student with no account (e.g. demo data) has none to edit.
+    account = student.user
+    new_username = None
+    if "username" in data:
+        if not account:
+            return jsonify({"error": "no_account",
+                            "message": "This student has no login account"}), 400
+        new_username, err = _check_username(data["username"], exclude_user_id=account.id)
+        if err:
+            return err
+    new_password = None
+    if data.get("password"):
+        if not account:
+            return jsonify({"error": "no_account",
+                            "message": "This student has no login account"}), 400
+        new_password = data["password"]
+        if len(new_password) < OVERSEER_SET_PASSWORD_MIN:
+            return jsonify({"error": "weak_password",
+                            "message": f"Password must be at least {OVERSEER_SET_PASSWORD_MIN} characters"}), 400
+
+    new_worker_type = None
+    if "worker_type" in data:
+        # Blank clears it back to "not set".
+        new_worker_type = (data["worker_type"] or "").strip().upper() or None
+        if new_worker_type is not None and new_worker_type not in WORKER_TYPES:
+            return jsonify({"error": "invalid_worker_type",
+                            "message": "Worker type must be one of " + ", ".join(WORKER_TYPES)}), 400
+
     new_insurance = None
     if "insurance_number" in data:
         # Free text: the insurer's format isn't ours to police, and a wrong
@@ -192,6 +244,12 @@ def update_student(student_id):
         student.student_id = new_student_id
     if "insurance_number" in data:
         student.insurance_number = new_insurance
+    if "worker_type" in data:
+        student.worker_type = new_worker_type
+    if new_username is not None:
+        account.username = new_username
+    if new_password is not None:
+        account.set_password(new_password)
     if "is_active" in data:
         student.is_active = bool(data["is_active"])
     student.colour, student.shape = colour, shape
@@ -199,6 +257,7 @@ def update_student(student_id):
     db.session.commit()
     out = student.to_dict()
     out["insurance_number"] = student.insurance_number
+    out["username"] = account.username if account else None
     return jsonify(out)
 
 

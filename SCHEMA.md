@@ -51,6 +51,8 @@ Roster period — the student list changes each semester.
 | student_id | varchar(32) | **letters and numbers, any length**; unique (case-insensitively); validate in app code |
 | colour | text | hex from the managed 8-colour palette (CLAUDE §15) |
 | shape | enum | circle / triangle / square / diamond |
+| insurance_number | varchar(32) null | 勞保 number; overseer-only, never sent to students |
+| worker_type | enum null | OW (Official Worker) / SW (Service Worker) / TA (Teaching Assistant); set by the overseer, null until set |
 | line_user_id | text null | optional; only if individual DMs are enabled later |
 | is_active | bool | leaving mid-semester deactivates rather than deletes |
 | is_demo | bool | seeded demo row; **"Reset demo data" deletes only these** |
@@ -374,6 +376,8 @@ Fixed UI text, bilingual. Can be a static JSON file rather than a table.
 |---|---|---|
 | id | pk | |
 | student_id | fk → student null | null for overseer/admin accounts |
+| username | varchar | login name — **not an email**; stored lowercased, so case-insensitive; letters, digits, `.` `_` `-` |
+| password_hash | text | of the password **lowercased** — passwords are case-insensitive |
 | role | enum | overseer / student |
 | invite_token / auth fields | — | invite-only |
 

@@ -27,12 +27,18 @@ venv/Scripts/python seed.py                       # creates tables + the first o
 venv/Scripts/python wsgi.py                       # runs on :5057 by default (set PORT to change)
 ```
 
-Open `http://127.0.0.1:5057/login`. Log in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`
-from `.env`. Everything else (semesters, students, months) is invite-only and
+Open `http://127.0.0.1:5057/login`. Log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+from `.env` (an older `ADMIN_EMAIL` still works — the part before the @ becomes
+the username). Everything else (semesters, students, months) is invite-only and
 set up from **Setup** as that overseer.
 
+Accounts log in with a **username, not an email**. Usernames and passwords are
+both case-insensitive. The overseer creates each student's invite under a
+username and can change a student's username or set a new password from the
+dashboard (Students → Edit).
+
 `seed.py` is idempotent — safe to re-run; it only creates the overseer account
-if one with that email doesn't already exist.
+if one with that username doesn't already exist.
 
 **Local HTTP note:** `SESSION_COOKIE_SECURE` is on by default (production
 default, requires HTTPS). Running locally over plain `http://`, set
