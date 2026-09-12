@@ -10,15 +10,28 @@
     <div class="panel" v-else-if="!month">No month is currently open for selection.</div>
     <template v-else>
       <p class="hint" v-if="!windowOpen">Selection window is closed 選填時段目前未開放</p>
-      <p>[[ selected.size ]] hours selected · greyed cells aren't offered (closed day or not a working hour)</p>
+      <p>[[ selected.size ]] hours selected 已選 [[ selected.size ]] 小時</p>
       <p class="hint"><strong>Shifts are 2–4 hours</strong> within a morning or an afternoon — pick hours in
         blocks. A single hour on its own is unlikely to be scheduled. 班次為連續 2–4 小時，請以時段區塊勾選。</p>
-      <p class="hint">
-        <span style="display:inline-block; width:10px; height:10px; background:#E7F0EB; border-left:2px solid var(--ok); vertical-align:middle;"></span> your regular hours ·
-        <span style="display:inline-block; width:10px; height:10px; background:var(--open-bg); border-left:2px solid var(--open); vertical-align:middle;"></span> someone else's regular slot (probably covered) ·
-        <span style="display:inline-block; width:10px; height:10px; background:var(--urgent-bg); border-left:2px solid var(--urgent); vertical-align:middle;"></span> that person already opted out — needs a volunteer ·
-        <span style="display:inline-block; width:10px; height:10px; border-left:2px solid var(--avail-blue); vertical-align:middle;"></span> open/shared hours
-      </p>
+
+      <!-- The key: the same cells at full size, each explained in Chinese. -->
+      <div class="avail-key">
+        <div class="item" v-for="k in KEY" v-bind:key="k.cat">
+          <div class="sample reg-cell avail-cell" v-bind:class="'avail-' + k.cat"
+               v-bind:style="k.cat === 'mine' ? { background: 'var(--ok)' } : null">
+            <span class="avail-tick" v-if="k.cat === 'mine'">✓</span>
+            <svg class="avail-ico" v-else-if="k.cat === 'unavailable'" v-bind:width="18" height="18"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>
+            </svg>
+            <span class="avail-label" v-else>[[ k.label ]]</span>
+          </div>
+          <div>
+            <div class="t">[[ k.label ]] <span class="hint">[[ k.en ]]</span></div>
+            <div class="d">[[ k.zh ]]</div>
+          </div>
+        </div>
+      </div>
 
       <div style="display:flex; gap:8px; align-items:center; margin:10px 0;">
         <button class="secondary" v-bind:disabled="!windowOpen || !hasRegularHours" v-on:click="addRegularHours">Add my regular hours</button>
@@ -33,7 +46,9 @@
             <thead>
               <tr>
                 <th class="h">時 / hr</th>
-                <th v-for="d in week" v-bind:key="d" v-bind:class="{ 'reg-unavailable': isClosed(d) }">
+                <th v-for="d in week" v-bind:key="d"
+                    v-bind:class="{ 'reg-unavailable': isClosed(d), 'day-out': isOutOfMonth(d) }"
+                    v-bind:title="isOutOfMonth(d) ? 'Not part of this month 不屬於本月' : null">
                   [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
                   <div class="hint" v-if="isClosed(d)">[[ closedReason(d) ]]</div>
                 </th>
@@ -43,22 +58,44 @@
               <tr v-for="h in HOURS" v-bind:key="h">
                 <td class="h mono">[[ hourLabel(h) ]]</td>
                 <td v-for="d in week" v-bind:key="d+'_'+h"
-                    class="reg-cell"
+                    class="reg-cell avail-cell"
                     v-bind:class="cellClass(d,h)"
-                    v-bind:style="isSelected(d,h) ? { background: selectedColor(d,h) } : {}"
-                    style="cursor:pointer;"
+                    v-bind:style="cellStyle(d,h)"
+                    v-bind:title="cellTitle(d,h)"
                     v-on:click="toggle(d,h)">
-                  <span v-if="isSelected(d,h)" style="color:#fff;">✓</span>
+                  <span class="avail-tick" v-if="isSelected(d,h)">✓</span>
+                  <template v-else-if="category(d,h) === 'out'"></template>
+                  <template v-else>
+                    <!-- Closed day or an hour the office isn't staffed. -->
+                    <svg class="avail-ico" v-if="category(d,h) === 'unavailable'" width="16" height="16"
+                         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>
+                    </svg>
+                    <!-- Someone else's regular hour: spelled out on a wide
+                         screen, one figure icon where there's no room. -->
+                    <template v-else-if="category(d,h) === 'taken'">
+                      <svg class="avail-ico" v-if="narrow" width="15" height="15" viewBox="0 0 24 24"
+                           fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+                        <circle cx="12" cy="8" r="3.4"/><path d="M5.5 19.5a6.5 6.5 0 0 1 13 0"/>
+                      </svg>
+                      <span class="avail-label" v-else>已有固定人員</span>
+                    </template>
+                    <span class="avail-label" v-else>[[ cellLabel(d,h) ]]</span>
+                  </template>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </template>
-      <div style="display:flex; flex-wrap:wrap; gap:8px; margin:14px 16px 0;">
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 16px 0;">
         <button v-bind:disabled="!windowOpen || saving" v-on:click="save">Save my hours 儲存我的時段</button>
-        <button class="secondary" v-bind:disabled="!windowOpen || saving || (noHours && !selected.size)"
+        <!-- Off while any hour is ticked: the two answers contradict each
+             other, and this one wipes a selection. Untick everything first. -->
+        <button class="secondary" v-bind:disabled="!windowOpen || saving || !!selected.size || noHours"
                 v-on:click="saveNoHours">No hours this month 本月不排班</button>
+        <span class="hint" v-if="selected.size && !noHours">Untick every hour first to say you're not available.
+          若本月不排班，請先取消勾選所有時段。</span>
       </div>
       <div class="statusline" v-if="noHours && !selected.size" style="margin:10px 16px 0;">
         <strong>You've said you're not available this month.</strong>
@@ -74,18 +111,39 @@
 const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const myStudentId = (window.CURRENT_USER && window.CURRENT_USER.student) ? window.CURRENT_USER.student.id : null;
+
+// One flat colour per kind of hour. `label` is what the cell says on a wide
+// screen, `short` its two-character form on a phone; the key below the
+// heading explains each one in full.
+const CATEGORIES = {
+  open:        { label: "可自由選填", short: "可選", en: "Fill optional" },
+  mine:        { label: "我的固定班", short: "固定", en: "My regular hour" },
+  taken:       { label: "已有固定人員", short: "", en: "Regular taken" },
+  required:    { label: "需要填補", short: "需填", en: "Fill required" },
+  unavailable: { label: "不開放", short: "", en: "Not available" },
+};
+const KEY = [
+  { cat: "open", zh: "任何人都可以選填的時段。勾選代表你那個時間可以上班。" },
+  { cat: "mine", zh: "你的固定班時段，系統已預先勾選；該週無法上班請取消勾選。" },
+  { cat: "taken", zh: "其他同學的固定班，通常已有人上班，不需要你選填。" },
+  { cat: "required", zh: "原本的固定班同學本月不上班，這個時段需要有人補上。" },
+  { cat: "unavailable", zh: "休假日或辦公室不排班的時段，無法選填。" },
+].map(k => Object.assign({}, CATEGORIES[k.cat], k));
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
     return {
       month: null, dates: [], cells: [], selected: new Set(),
       windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false, noHours: false, loadError: "",
-      loadingLastMonth: false, lastMonthMsg: "", HOURS,
+      loadingLastMonth: false, lastMonthMsg: "", HOURS, KEY,
     };
   },
   computed: {
     dateStrs() { return this.dates.map(d => d.date); },
-    weeks() { return OIA.groupIntoWeeks(this.dateStrs); },
+    // Full Mon–Fri weeks, so every week has the same five columns. A month
+    // starting mid-week borrows the days before it from the month before;
+    // those are drawn greyed and blank (see category() -> "out").
+    weeks() { return this.month ? OIA.monthWeeks(this.month.year_month) : []; },
     dateByStr() {
       const map = {};
       this.dates.forEach(d => { map[d.date] = d; });
@@ -134,27 +192,46 @@ const app = createApp({
       const c = this.cell(date, hour);
       return c && c.slot_id && this.selected.has(c.slot_id);
     },
-    // Four tiers, bar colour shows regardless of selection: green = your own
-    // regular hours, grey = someone else's regular slot (probably covered),
-    // red = that regular slot is confirmed open (needs a volunteer), blue =
-    // plain open/shared hours. Selected fill uses the same colour family —
-    // see selectedColor() — so a manual pick and a bulk-added one look
-    // identical; only the category matters, not how it got selected.
-    cellClass(date, hour) {
+    // Which kind of hour this is. The fill says it, the label spells it out;
+    // a selected cell takes the category's strong colour and a tick, so a
+    // hand-picked hour and a bulk-added one look identical — only the
+    // category matters, not how it got selected.
+    isOutOfMonth(date) { return this.month && date.slice(0, 7) !== this.month.year_month; },
+    category(date, hour) {
+      if (this.isOutOfMonth(date)) return "out";
       const c = this.cell(date, hour);
-      if (!c || !c.slot_id) return { "reg-unavailable": true };
-      if (c.is_regular) return { "avail-mine-regular": true };
+      if (!c || !c.slot_id) return "unavailable";
+      if (c.is_regular) return "mine";
       if (c.regular_student_id && c.regular_student_id !== myStudentId) {
-        return c.regular_declined ? { "avail-urgent": true } : { "avail-regular-other": true };
+        return c.regular_declined ? "required" : "taken";
       }
-      return { "avail-open": true };
+      return "open";
+    },
+    // "day-out" is the same greyed-and-blank treatment the overseer's
+    // schedule grid uses for days outside the month.
+    cellClass(date, hour) {
+      const cat = this.category(date, hour);
+      return cat === "out" ? "day-out" : "avail-" + cat;
+    },
+    cellLabel(date, hour) {
+      const cat = CATEGORIES[this.category(date, hour)];
+      return this.narrow ? cat.short : cat.label;
+    },
+    cellTitle(date, hour) {
+      const cat = CATEGORIES[this.category(date, hour)];
+      return cat ? cat.label + " · " + cat.en : "Not part of this month 不屬於本月";
     },
     selectedColor(date, hour) {
-      const c = this.cell(date, hour);
-      if (!c) return "var(--avail-blue)";
-      if (c.is_regular) return "var(--ok)";
-      if (c.regular_student_id && c.regular_student_id !== myStudentId && c.regular_declined) return "var(--urgent)";
+      const cat = this.category(date, hour);
+      if (cat === "mine") return "var(--ok)";
+      if (cat === "required") return "var(--fill-req)";
       return "var(--avail-blue)";
+    },
+    cellStyle(date, hour) {
+      const cat = this.category(date, hour);
+      const style = { cursor: (cat === "out" || cat === "unavailable") ? "default" : "pointer" };
+      if (this.isSelected(date, hour)) style.background = this.selectedColor(date, hour);
+      return style;
     },
     weekdayLabel(date) { return OIA.weekdayLabel(date); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
@@ -190,7 +267,11 @@ const app = createApp({
       try {
         await OIA.api.put("/api/availability/" + this.month.id, { slot_ids: Array.from(this.selected) });
         if (this.selected.size) this.noHours = false;  // hours replace "no hours"
-        this.saveMsg = "Saved.";
+        // Saving nothing isn't an answer — it reads as "hasn't replied yet".
+        this.saveMsg = this.selected.size
+          ? "Saved."
+          : "Saved, but no hours are selected — that counts as no reply. If you can't work at all this " +
+            "month, use “No hours this month”. 未勾選任何時段；若本月無法上班請按「本月不排班」。";
       } finally {
         this.saving = false;
       }
@@ -198,9 +279,10 @@ const app = createApp({
     // "I'm not available this month" — an answer in its own right, so the
     // sign-in page stops reminding them. Clears any hours they'd ticked.
     async saveNoHours() {
-      if (this.selected.size && !confirm(
-          "This clears the " + this.selected.size + " hour(s) you've selected and tells the office " +
-          "you're not available this month. Continue?")) {
+      // Only reachable with nothing ticked (see the button's disabled rule),
+      // so this guards a stray click, not a lost selection.
+      if (!confirm("Tell the office you're not available at all in " + this.month.year_month +
+                   "? You won't be scheduled.\n確定本月不排班？將不會被排入班表。")) {
         return;
       }
       this.saving = true; this.saveMsg = "";
