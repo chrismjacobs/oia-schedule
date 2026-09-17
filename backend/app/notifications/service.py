@@ -112,15 +112,35 @@ def notify_committed(month):
     )
 
 
-def notify_leave_requested(leave_request):
+def notify_leave_requested(leave_requests):
     """Fires the moment a student submits a leave request — before it's
     approved. Deliberately generic (no name, no reason): it flags the
     overseer to go review it, and primes students that a slot may open up
-    soon, without exposing anything personal in the shared group."""
-    slot = leave_request.slot
+    soon, without exposing anything personal in the shared group.
+
+    Takes the whole batch from one submission (a single hour is a batch of
+    one) and sends exactly one message describing the span. A student asking
+    off for a four-hour shift is one piece of news, not four — and four
+    pushes for it is four off a LINE free-tier quota of 200 a month.
+
+    Keyed on the first request's id, so a later batch for the same student and
+    day is a separate notification, while a retry of this one is not.
+    """
+    requests = list(leave_requests)
+    if not requests:
+        return False
+    slots = sorted((r.slot for r in requests), key=lambda s: (s.date, s.hour))
+    first, last = slots[0], slots[-1]
+    if len(slots) == 1:
+        span = f"{first.date.isoformat()} {first.hour}:00"
+    elif first.date == last.date:
+        span = f"{first.date.isoformat()} {first.hour}:00-{last.hour + 1}:00 ({len(slots)} hours)"
+    else:
+        span = (f"{first.date.isoformat()} {first.hour}:00 to "
+                f"{last.date.isoformat()} {last.hour + 1}:00 ({len(slots)} hours)")
     return notify_once(
-        "leave_requested", "group", "leave_request", leave_request.id,
-        f"[OIA] A leave request came in for {slot.date.isoformat()} {slot.hour}:00 — pending review.",
+        "leave_requested", "group", "leave_request", requests[0].id,
+        f"[OIA] A leave request came in for {span} — pending review.",
     )
 
 

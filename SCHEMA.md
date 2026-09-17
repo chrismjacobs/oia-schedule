@@ -226,10 +226,21 @@ CP-SAT on everything else — see "Regular schedule" above.
 | student_id | fk → student | |
 | slot_id | fk → slot | slot being dropped |
 | reason | text | |
-| requested_at | ts | for lead-time / too-late analysis |
+| requested_at | ts | for lead-time / too-late analysis; **shared by every row from one submission** — a student asks off a run of hours in one go, and this timestamp is what regroups the per-hour rows back into the shift they asked for |
 | lead_time_hours | int | derived: slot.start − requested_at |
-| status | enum | pending / approved / denied |
+| status | enum | pending / approved / withdrawn |
 | decided_by | fk → user null | |
+
+One row **per hour**, always — a student may ask off 08:00–12:00 in one
+submission, but the overseer approves and advertises hour by hour, and an
+Open Shifts claim is made in hours.
+
+`withdrawn` is the student taking back their own request before anyone acted
+on it (the mis-click undo); only `pending` rows can be withdrawn, and the row
+is kept rather than deleted so the history stays honest. It is excluded from
+the pending queue, from `slot_sync`'s "leave requested" guard, and from the
+dashboard's too-often / too-late patterns. There is no `denied` — a student
+who can't come, can't come.
 
 On approval → the slot is reopened (below).
 

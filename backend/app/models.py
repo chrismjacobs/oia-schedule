@@ -404,7 +404,13 @@ class LeaveRequest(db.Model):
     reason = db.Column(db.Text, nullable=False)
     requested_at = db.Column(db.DateTime, nullable=False, default=local_now)
     lead_time_hours = db.Column(db.Float, nullable=True)
-    status = db.Column(db.String(16), nullable=False, default="pending")  # pending|approved|denied
+    # pending|approved|withdrawn. "withdrawn" is the student taking back their
+    # own mis-click before anyone acted on it; the row is kept rather than
+    # deleted so the history stays honest, but it is excluded everywhere a
+    # live request matters (the pending queue, slot_sync's busy set, the
+    # dashboard's too-late pattern). There is still no "denied" - see
+    # decide_leave.
+    status = db.Column(db.String(16), nullable=False, default="pending")
     decided_by = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
     decided_at = db.Column(db.DateTime, nullable=True)
 
@@ -416,6 +422,10 @@ class LeaveRequest(db.Model):
             "id": self.id,
             "student_id": self.student_id,
             "slot_id": self.slot_id,
+            # Nested so the student's own list can say "Wed 24 Sep 08:00"
+            # rather than "#417" - a mis-clicked request has to be
+            # recognisable before it can be withdrawn.
+            "slot": self.slot.to_dict() if self.slot else None,
             "reason": self.reason,
             "requested_at": self.requested_at.isoformat(),
             "lead_time_hours": self.lead_time_hours,

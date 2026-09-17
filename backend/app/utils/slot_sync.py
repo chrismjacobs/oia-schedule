@@ -75,7 +75,10 @@ def sync_month_slots(month):
                 Assignment.slot_id.in_(ids), Assignment.schedule_id.in_(committed_ids)).all()
         } if committed_ids else {}
         busy = {
-            "leave requested": {r.slot_id for r in LeaveRequest.query.filter(LeaveRequest.slot_id.in_(ids))},
+            # Withdrawn requests excluded: a mis-click the student took back
+            # shouldn't keep pinning an hour that nothing else needs.
+            "leave requested": {r.slot_id for r in LeaveRequest.query.filter(
+                LeaveRequest.slot_id.in_(ids), LeaveRequest.status != "withdrawn")},
             "offered on Open Shifts": {r.slot_id for r in ReopenedSlot.query.filter(ReopenedSlot.slot_id.in_(ids))},
             "hours already recorded": {r.slot_id for r in SessionHour.query.filter(SessionHour.slot_id.in_(ids))},
         }

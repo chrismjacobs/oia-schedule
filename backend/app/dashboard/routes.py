@@ -81,9 +81,13 @@ def build_month_dashboard(month):
         if (sid, slot_id) not in assigned_pairs and slot_id in slot_by_id:
             signed_in_not_scheduled.append({"student_id": sid, "slot": slot_by_id[slot_id].to_dict()})
 
+    # Withdrawn requests are left out of the pattern tracking entirely: a
+    # student who mis-clicked and undid it within the minute hasn't asked for
+    # anything, and counting it would make the too-late signal a measure of
+    # fat fingers rather than of short notice.
     leave_rows = (
         LeaveRequest.query.join(Slot, LeaveRequest.slot_id == Slot.id)
-        .filter(Slot.month_id == month.id).all()
+        .filter(Slot.month_id == month.id, LeaveRequest.status != "withdrawn").all()
     )
     approved_count = defaultdict(int)
     for lr in leave_rows:

@@ -25,36 +25,163 @@ def my_leave_requests():
     return jsonify([r.to_dict() for r in rows])
 
 
+LIVE_LEAVE_STATUSES = ("pending", "approved")
+
+
+def _my_scheduled_slots(slot_ids):
+    """The subset of `slot_ids` the logged-in student is actually on, per the
+    committed schedule. Leave can only be taken from a shift you hold."""
+    rows = (
+        Assignment.query.join(Schedule, Assignment.schedule_id == Schedule.id)
+        .filter(Assignment.slot_id.in_(slot_ids),
+                Assignment.student_id == current_user.student_id,
+                Schedule.status == "committed")
+        .all()
+    )
+    return {a.slot_id for a in rows}
+
+
+def _requested_leave_slots(slot_ids):
+    """Slots among `slot_ids` this student already has a live (pending or
+    approved) request against — so re-submitting an overlapping range doesn't
+    stack duplicates in the overseer's queue. Withdrawn rows don't count; the
+    student is free to ask again."""
+    rows = LeaveRequest.query.filter(
+        LeaveRequest.slot_id.in_(slot_ids),
+        LeaveRequest.student_id == current_user.student_id,
+        LeaveRequest.status.in_(LIVE_LEAVE_STATUSES),
+    ).all()
+    return {r.slot_id for r in rows}
+
+
+def _leave_slots_from_request(data):
+    """The slots one submission is asking off, as (slots, error_response).
+
+    Two shapes, because leave is asked for in shifts but administered by the
+    hour (CLAUDE.md #8):
+
+      {"slot_id": 417}                                   - one hour
+      {"date": "2026-09-24", "start_hour": 8, "end_hour": 12}  - a run
+
+    `end_hour` is exclusive, so 8->12 reads as "08:00 to 12:00" and covers
+    hours 8, 9, 10 and 11. The lunch gap is handled by SLOT_HOURS, so 8->17
+    is the whole day and never invents a 12:00 slot.
+    """
+    slot_id = data.get("slot_id")
+    if slot_id:
+        return [Slot.query.get_or_404(slot_id)], None
+
+    date_str = data.get("date")
+    start_hour = data.get("start_hour")
+    end_hour = data.get("end_hour")
+    if not date_str or start_hour is None or end_hour is None:
+        return None, (jsonify({"error": "slot_id_or_date_range_required"}), 400)
+    try:
+        d = date_cls.fromisoformat(date_str)
+        start_hour = int(start_hour)
+        end_hour = int(end_hour)
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": "invalid_date_or_hour"}), 400)
+    if end_hour <= start_hour:
+        return None, (jsonify({"error": "end_must_be_after_start"}), 400)
+
+    hours = [h for h in SLOT_HOURS if start_hour <= h < end_hour]
+    if not hours:
+        return None, (jsonify({"error": "no_working_hours_in_range"}), 400)
+    slots = Slot.query.filter(Slot.date == d, Slot.hour.in_(hours)).all()
+    return slots, None
+
+
 @bp.post("")
 @login_required_api
 def request_leave():
+    """Ask off a single hour or a whole run of them in one go.
+
+    The student picks a shift ("Wednesday, 08:00 to 12:00") because that is
+    how they think about it, but what gets stored is still one LeaveRequest
+    per hour: the overseer approves and advertises hour by hour, and an hour
+    is the unit an Open Shifts claim is made in. So the range fans out here
+    and nowhere downstream changes.
+
+    Hours in the range that the student isn't scheduled for, or has already
+    asked off, are skipped rather than failing the whole submission - a
+    student picking "the whole day" shouldn't have to know which hours those
+    are. The response reports what was created and what was skipped.
+    """
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
     data = request.get_json(force=True) or {}
-    slot_id = data.get("slot_id")
     reason = (data.get("reason") or "").strip()
-    if not slot_id or not reason:
+    if not reason:
         return jsonify({"error": "missing_fields"}), 400
 
-    slot = Slot.query.get_or_404(slot_id)
-    assignment = (
-        Assignment.query.join(Schedule, Assignment.schedule_id == Schedule.id)
-        .filter(Assignment.slot_id == slot_id, Assignment.student_id == current_user.student_id,
-                Schedule.status == "committed")
-        .first()
-    )
-    if not assignment:
+    slots, err = _leave_slots_from_request(data)
+    if err:
+        return err
+    if not slots:
+        return jsonify({"error": "no_slots_in_range"}), 400
+
+    slot_ids = [s.id for s in slots]
+    scheduled = _my_scheduled_slots(slot_ids)
+    already = _requested_leave_slots(slot_ids)
+    wanted = sorted((s for s in slots if s.id in scheduled and s.id not in already),
+                    key=lambda s: (s.date, s.hour))
+    if not wanted:
+        # Distinguish the two dead ends: "you're not on that shift" and
+        # "you already asked" need different things done about them.
+        if already:
+            return jsonify({"error": "already_requested"}), 409
         return jsonify({"error": "not_scheduled_for_slot"}), 400
 
+    # One timestamp for the whole batch: it's the key the student's own list
+    # groups on to show "08:00-12:00" as one line with one Withdraw button.
     now = local_now()
-    lead_hours = (_slot_start(slot) - now).total_seconds() / 3600.0
-
-    lr = LeaveRequest(student_id=current_user.student_id, slot_id=slot_id, reason=reason,
-                       requested_at=now, lead_time_hours=round(lead_hours, 2))
-    db.session.add(lr)
+    created = []
+    for slot in wanted:
+        lead_hours = (_slot_start(slot) - now).total_seconds() / 3600.0
+        lr = LeaveRequest(student_id=current_user.student_id, slot_id=slot.id, reason=reason,
+                          requested_at=now, lead_time_hours=round(lead_hours, 2))
+        db.session.add(lr)
+        created.append(lr)
     db.session.commit()
-    notify_leave_requested(lr)
-    return jsonify(lr.to_dict()), 201
+    notify_leave_requested(created)
+    return jsonify({
+        "requests": [lr.to_dict() for lr in created],
+        "created": len(created),
+        "skipped_not_scheduled": len([s for s in slots if s.id not in scheduled]),
+        "skipped_already_requested": len([s for s in slots if s.id in already]),
+    }), 201
+
+
+@bp.delete("/<int:leave_id>")
+@login_required_api
+def withdraw_leave(leave_id):
+    """Take back your own request - the mis-click undo.
+
+    Only while it's still pending. Once the overseer has approved it the
+    assignment is gone and the hour may already be advertised or claimed by
+    someone else, so un-asking is no longer the student's to do alone; they
+    have to talk to the overseer, and the error says so.
+
+    The row is marked `withdrawn`, not deleted: the overseer's pending queue
+    filters on status so it drops off there immediately, while the history of
+    what was asked for stays intact.
+    """
+    if not current_user.student_id:
+        return jsonify({"error": "students_only"}), 403
+    lr = LeaveRequest.query.get_or_404(leave_id)
+    if lr.student_id != current_user.student_id:
+        return jsonify({"error": "not_your_request"}), 403
+    if lr.status == "withdrawn":
+        return jsonify({"error": "already_withdrawn"}), 409
+    if lr.status != "pending":
+        return jsonify({"error": "already_decided",
+                        "message": "This leave was already approved — ask the overseer to put you back on the shift."}), 409
+
+    lr.status = "withdrawn"
+    lr.decided_at = local_now()
+    db.session.commit()
+    return jsonify(lr.to_dict())
 
 
 @bp.get("/admin")

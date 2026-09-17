@@ -156,6 +156,7 @@
       },
     });
     app.config.globalProperties.$bilingual = bilingual;
+    app.config.globalProperties.$weekday = weekdayLabel;
   }
 
   // ---------------- header nav (hamburger drawer), plain JS ----------------

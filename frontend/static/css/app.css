@@ -433,6 +433,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .error-text { color: #B3261E; font-size: 12px; margin-top: 4px; }
 .hint { color: var(--ink-3); font-size: 12px; }
+/* A row that's still listed for the record but no longer acts on anything —
+   a withdrawn leave request, say. Dimmed rather than hidden: "where did my
+   request go?" is worse than one greyed line. */
+.is-muted { opacity: .55; }
 
 /* ---------- Tables (app-specific, kept in the mockup's typographic language) ---------- */
 

@@ -8,32 +8,63 @@
     <template v-if="isStudent">
       <div class="panel">
         <h3>Request leave 申請請假</h3>
-        <form v-on:submit.prevent="submitRequest">
+        <p class="hint" v-if="!myDates.length">You have no upcoming shifts to take leave from.</p>
+        <form v-else v-on:submit.prevent="submitRequest">
           <div class="field">
-            <label>Slot</label>
-            <select v-model="slotId" required>
-              <option v-for="a in mySlots" v-bind:key="a.slot.id" v-bind:value="a.slot.id">[[ a.slot.date ]] [[ a.slot.hour ]]:00</option>
+            <label>Day</label>
+            <select v-model="leaveDate" v-on:change="resetRange" required>
+              <option v-for="d in myDates" v-bind:key="d.date" v-bind:value="d.date">
+                [[ $weekday(d.date) ]] [[ d.date ]] — [[ d.label ]]
+              </option>
             </select>
           </div>
+          <div class="field-row">
+            <div class="field">
+              <label>From</label>
+              <select v-model.number="startHour" required>
+                <option v-for="h in dayHours" v-bind:key="h" v-bind:value="h">[[ h ]]:00</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>To</label>
+              <select v-model.number="endHour" required>
+                <option v-for="h in endOptions" v-bind:key="h" v-bind:value="h">[[ h ]]:00</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">Asking off <strong>[[ selectedHours.length ]]</strong>
+            [[ selectedHours.length === 1 ? 'hour' : 'hours' ]]<span v-if="selectedHours.length">:
+            <span class="mono">[[ selectedHours.map(h => h + ':00').join(', ') ]]</span></span>.
+            Whole shift is the default — narrow it if you only need part of the day off.</p>
           <div class="field"><label>Reason</label><textarea v-model="reason" required rows="2"></textarea></div>
-          <button v-bind:disabled="busy" type="submit">Submit</button>
+          <button v-bind:disabled="busy || !selectedHours.length" type="submit">Submit</button>
         </form>
         <p class="hint">[[ message ]]</p>
-        <p class="hint">Once approved you're off that shift. The hour usually opens up on
-          <a href="/open-shifts">Open Shifts</a> for someone else to claim.</p>
+        <p class="hint">Once approved you're off those hours. They usually open up on
+          <a href="/open-shifts">Open Shifts</a> for someone else to claim — the overseer
+          releases them hour by hour, so part of a shift can be covered by more than one person.</p>
       </div>
 
       <div class="panel">
         <h3>My requests</h3>
-        <table class="data">
-          <thead><tr><th>Slot</th><th>Status</th></tr></thead>
+        <p class="hint" v-if="!myRequestGroups.length">Nothing requested yet.</p>
+        <table class="data" v-else>
+          <thead><tr><th>When</th><th>Reason</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            <tr v-for="r in myRequests" v-bind:key="r.id">
-              <td class="mono">#[[ r.slot_id ]]</td>
-              <td><span class="badge" v-bind:class="{ ok: r.status==='approved', warn: r.status==='denied' }">[[ r.status ]]</span></td>
+            <tr v-for="g in myRequestGroups" v-bind:key="g.key" v-bind:class="{ 'is-muted': g.status === 'withdrawn' }">
+              <td class="mono">[[ $weekday(g.date) ]] [[ g.date ]] [[ g.span ]]<span v-if="g.ids.length > 1"> ([[ g.ids.length ]]h)</span></td>
+              <td>[[ g.reason ]]</td>
+              <td><span class="badge" v-bind:class="{ ok: g.status==='approved', warn: g.status==='withdrawn' }">[[ g.status ]]</span></td>
+              <td>
+                <button class="danger" v-if="g.status === 'pending'" v-bind:disabled="busy" v-on:click="withdraw(g)">Withdraw</button>
+              </td>
             </tr>
           </tbody>
         </table>
+        <p class="hint">Asked by mistake? <strong>Withdraw</strong> takes a pending request straight
+          back off the overseer's list. Once it's been approved you're already off the shift and the
+          hours may have gone to someone else — ask the overseer to put you back on.</p>
+        <p class="error-text" v-if="withdrawMessage">[[ withdrawMessage ]]</p>
       </div>
     </template>
 
@@ -83,8 +114,76 @@ const app = createApp({
       // request id. Ticked by default — that's the common case; the overseer
       // unticks the exceptions.
       advertiseOnApprove: {},
-      slotId: "", reason: "", busy: false, message: "", adminMessage: "",
+      // Leave is asked for as a run of hours ("Wednesday, 08:00 to 12:00")
+      // because that's the shift the student is actually missing. It still
+      // becomes one request per hour on the server — the overseer approves
+      // and advertises by the hour.
+      leaveDate: "", startHour: null, endHour: null,
+      reason: "", busy: false, message: "", adminMessage: "", withdrawMessage: "",
     };
+  },
+  computed: {
+    // Upcoming days this student is scheduled on, each with its own hours.
+    myDates() {
+      const byDate = {};
+      this.mySlots.forEach(a => {
+        (byDate[a.slot.date] = byDate[a.slot.date] || []).push(a.slot.hour);
+      });
+      return Object.keys(byDate).sort().map(date => {
+        const hours = byDate[date].sort((a, b) => a - b);
+        return {
+          date,
+          hours,
+          label: hours[0] + ":00–" + (hours[hours.length - 1] + 1) + ":00",
+        };
+      });
+    },
+    dayHours() {
+      const d = this.myDates.find(x => x.date === this.leaveDate);
+      return d ? d.hours : [];
+    },
+    // "To" is an end time, not a start hour: picking 12:00 means you're off
+    // through 11:59. Offering hour+1 for each scheduled hour keeps that
+    // reading honest across the lunch gap (11:00 → 12:00, not 11:00 → 13:00).
+    endOptions() {
+      return this.dayHours.filter(h => this.startHour === null || h >= this.startHour).map(h => h + 1);
+    },
+    selectedHours() {
+      if (this.startHour === null || this.endHour === null) return [];
+      return this.dayHours.filter(h => h >= this.startHour && h < this.endHour);
+    },
+    // One submission = one batch of per-hour rows sharing a requested_at, so
+    // that timestamp regroups them back into the shift the student asked for.
+    // Status is part of the key too: if the overseer approves half of a run,
+    // the student should see that split rather than one misleading line.
+    myRequestGroups() {
+      const groups = {};
+      this.myRequests.forEach(r => {
+        const date = r.slot ? r.slot.date : "";
+        const key = r.requested_at + "|" + date + "|" + r.status;
+        if (!groups[key]) groups[key] = { key, date, status: r.status, reason: r.reason, ids: [], hours: [] };
+        groups[key].ids.push(r.id);
+        if (r.slot) groups[key].hours.push(r.slot.hour);
+      });
+      return Object.values(groups).map(g => {
+        g.hours.sort((a, b) => a - b);
+        g.span = g.hours.length
+          ? g.hours[0] + ":00–" + (g.hours[g.hours.length - 1] + 1) + ":00"
+          : "";
+        return g;
+      }).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    },
+  },
+  watch: {
+    // Moving "From" past "To" would otherwise leave an end time that isn't
+    // in the list any more, and the form would just sit there disabled with
+    // nothing on screen explaining why. Push "To" along instead.
+    startHour(h) {
+      if (h !== null && (this.endHour === null || this.endHour <= h)) {
+        const next = this.endOptions;
+        this.endHour = next.length ? next[next.length - 1] : null;
+      }
+    },
   },
   async mounted() {
     if (this.isStudent) await this.loadStudent();
@@ -99,24 +198,61 @@ const app = createApp({
       const today = new Date().toISOString().slice(0, 10);
       this.mySlots = assignments.filter(a => a.slot.date >= today);
       this.myRequests = requests;
+      if (!this.myDates.some(d => d.date === this.leaveDate)) {
+        this.leaveDate = this.myDates.length ? this.myDates[0].date : "";
+      }
+      this.resetRange();
+    },
+    // Default to the whole shift on the chosen day — that's what leave
+    // usually means, and it's the case that used to take four submissions.
+    resetRange() {
+      const hours = this.dayHours;
+      this.startHour = hours.length ? hours[0] : null;
+      this.endHour = hours.length ? hours[hours.length - 1] + 1 : null;
     },
     async loadAdmin() {
       this.adminRequests = await OIA.api.get("/api/leave/admin?status=pending");
       const choices = {};
       this.adminRequests.forEach(r => {
-        choices[r.id] = this.advertiseOnApprove[r.id] !== undefined ? this.advertiseOnApprove[r.id] : true;
+        choices[r.id] = this.advertiseOnApprove[r.id] !== undefined ? this.advertiseOnApprove[r.id] : false;
       });
       this.advertiseOnApprove = choices;
     },
     async submitRequest() {
       this.busy = true; this.message = "";
       try {
-        await OIA.api.post("/api/leave", { slot_id: Number(this.slotId), reason: this.reason });
-        this.reason = ""; this.slotId = "";
+        const res = await OIA.api.post("/api/leave", {
+          date: this.leaveDate,
+          start_hour: this.startHour,
+          end_hour: this.endHour,
+          reason: this.reason,
+        });
+        this.reason = "";
         await this.loadStudent();
-        this.message = "Request submitted.";
+        const n = res.created;
+        this.message = "Requested " + n + (n === 1 ? " hour off." : " hours off.")
+          + (res.skipped_already_requested ? " " + res.skipped_already_requested + " already requested." : "");
       } catch (e) {
-        this.message = e.message;
+        this.message = e.message === "already_requested"
+          ? "You've already asked for leave on those hours."
+          : e.message === "not_scheduled_for_slot"
+            ? "You're not scheduled for those hours."
+            : e.message;
+      } finally { this.busy = false; }
+    },
+    // Withdraws every hour of the group at once, since that's the shift the
+    // student asked off in the first place. Each hour is its own row on the
+    // server, so this is a short loop rather than a bulk endpoint.
+    async withdraw(g) {
+      const n = g.ids.length;
+      if (!window.confirm("Withdraw this leave request (" + n + (n === 1 ? " hour" : " hours") + ")?")) return;
+      this.busy = true; this.withdrawMessage = "";
+      try {
+        for (const id of g.ids) await OIA.api.del("/api/leave/" + id);
+        await this.loadStudent();
+      } catch (e) {
+        this.withdrawMessage = e.payload && e.payload.message ? e.payload.message : e.message;
+        await this.loadStudent();
       } finally { this.busy = false; }
     },
     async approve(r) {
