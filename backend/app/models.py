@@ -46,6 +46,23 @@ WORKER_TYPES = {
     "TA": "Teaching Assistant",
 }
 
+# Where the student's pay comes from, as the university's insurance portal
+# asks it — the keys are that portal's own <option> values for
+# `ddlJobCategory`, kept verbatim so the console script (§ insurance) can put
+# one straight into the select without a second lookup table. Null until the
+# overseer sets it; "0" is a real value (College), not "unset".
+FUNDING_CATEGORIES = {
+    "0": "College",
+    "1": "On-Campus Scholarship Award (Office of Research and Development)",
+    "2": "On-Campus Funding (Not On-Campus Scholarship Award)",
+    "3": "MOE Funding",
+    "4": "NSTC Funding",
+    "5": "Other Government Agencies Funding",
+    "6": "Other Funding",
+}
+
+PROJECT_NAME_MAX = 128
+
 SLOT_HOURS = [8, 9, 10, 11, 13, 14, 15, 16]  # 1-hour slots, Mon-Fri (CLAUDE.md #4)
 
 REGULAR_SLOT_STATES = ["unavailable", "unassigned", "assigned"]
@@ -94,6 +111,10 @@ class Student(db.Model):
     # overseer's. Served only by the overseer-gated /api/admin/students.
     insurance_number = db.Column(db.String(32), nullable=True)
     worker_type = db.Column(db.String(2), nullable=True)  # a WORKER_TYPES key: OW | SW | TA
+    # Both fed to the insurance portal alongside insurance_number, and
+    # overseer-only for the same reason: kept out of to_dict().
+    project_name = db.Column(db.String(PROJECT_NAME_MAX), nullable=True)
+    funding_category = db.Column(db.String(1), nullable=True)  # a FUNDING_CATEGORIES key: "0".."6"
     line_user_id = db.Column(db.String(64), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     is_demo = db.Column(db.Boolean, nullable=False, default=False)  # seeded row — "Reset demo data" deletes these

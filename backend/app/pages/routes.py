@@ -1,7 +1,7 @@
 from flask import render_template, redirect, url_for, request
 from flask_login import current_user
 
-from app.models import STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES
+from app.models import STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES, FUNDING_CATEGORIES
 from app.pages import bp
 from app.utils.decorators import page_login_required, page_overseer_required
 
@@ -36,12 +36,13 @@ def week_page():
 @bp.get("/dashboard")
 @page_overseer_required
 def dashboard_page():
-    # The student edit form offers the managed token palette and the worker
-    # types — injected from the one definition in models.py rather than
-    # copied into the page.
+    # The student edit form offers the managed token palette, the worker
+    # types and the insurance portal's funding categories — injected from the
+    # one definition in models.py rather than copied into the page.
     return render_template("dashboard.html", active_nav="dashboard", wide_page=True,
                            palette=STUDENT_PALETTE, shapes=STUDENT_SHAPES,
-                           worker_types=WORKER_TYPES)
+                           worker_types=WORKER_TYPES,
+                           funding_categories=FUNDING_CATEGORIES)
 
 
 @bp.get("/draft")

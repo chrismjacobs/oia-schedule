@@ -17,7 +17,7 @@
     <h2>Students 學生</h2>
     <div class="table-scroll">
       <table class="data">
-        <thead><tr><th>Name</th><th>Type</th><th>ID</th><th>Insurance 勞保</th><th>Token</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>ID</th><th>Insurance 勞保</th><th>Project 計畫</th><th>Funding 經費</th><th>Token</th><th>Active</th><th></th></tr></thead>
         <tbody>
           <template v-for="s in students" v-bind:key="s.id">
             <tr>
@@ -25,10 +25,16 @@
               <td v-bind:title="WORKER_TYPES[s.worker_type] || 'Not set'">[[ s.worker_type || '—' ]]</td>
               <td class="mono">[[ s.student_id ]]</td>
               <td class="mono">[[ s.insurance_number || '—' ]]</td>
+              <td v-bind:title="s.project_name || 'Not set'">[[ s.project_name || '—' ]]</td>
+              <!-- Full label on hover; the cell shows the short form because
+                   some of these run to eight words. -->
+              <td v-bind:title="fundingLabel(s.funding_category) || 'Not set'">[[ fundingShort(s.funding_category) ]]</td>
               <td><oia-token v-bind:student="s" size="sm"></oia-token></td>
               <td>[[ s.is_active ? 'yes' : 'no' ]]</td>
               <td class="row-actions">
                 <button class="secondary" v-on:click="startEdit(s)">[[ editingId === s.id ? 'Close' : 'Edit' ]]</button>
+                <button class="secondary" v-bind:disabled="busy" v-on:click="startInsurance(s)"
+                        title="Console snippets for the university insurance portal">[[ insuranceId === s.id ? 'Close' : 'Insurance' ]]</button>
                 <button class="secondary" v-if="s.has_account" v-bind:disabled="busy" v-on:click="loginAs(s)"
                         v-bind:title="'See the app as ' + (s.english_name || s.chinese_name) + ' — no password needed'">Log in as</button>
                 <button class="secondary" v-on:click="toggleStudentActive(s)">[[ s.is_active ? 'Deactivate' : 'Activate' ]]</button>
@@ -36,7 +42,7 @@
               </td>
             </tr>
             <tr v-if="editingId === s.id">
-              <td colspan="7" class="edit-row">
+              <td colspan="9" class="edit-row">
                 <form v-on:submit.prevent="saveStudent(s)" v-on:keydown.esc="editingId = null">
                   <div class="field-row">
                     <div class="field"><label>Chinese name 中文姓名</label><input v-model="draft.chinese_name" maxlength="64"></div>
@@ -53,6 +59,18 @@
                              pattern="[A-Za-z0-9]+" title="Letters and numbers only"></div>
                     <div class="field"><label>Insurance 勞保</label>
                       <input class="mono" v-model="draft.insurance_number" maxlength="32" placeholder="—"></div>
+                  </div>
+                  <!-- Asked for by the university's insurance portal, and fed
+                       straight into the console script the Insurance button
+                       generates. -->
+                  <div class="field-row">
+                    <div class="field"><label>Project name 計畫名稱</label>
+                      <input v-model="draft.project_name" maxlength="128" placeholder="—"></div>
+                    <div class="field"><label>Funding 經費來源</label>
+                      <select v-model="draft.funding_category">
+                        <option value="">— not set —</option>
+                        <option v-for="(label, code) in FUNDING_CATEGORIES" v-bind:key="code" v-bind:value="code">[[ label ]]</option>
+                      </select></div>
                   </div>
                   <div class="field-row" v-if="s.has_account">
                     <div class="field"><label>Username 帳號</label>
@@ -93,6 +111,59 @@
                   <button type="submit" v-bind:disabled="busy || !!tokenOwner(s)">Save changes</button>
                   <button type="button" class="secondary" v-on:click="editingId = null">Cancel</button>
                 </form>
+              </td>
+            </tr>
+            <!-- The insurance portal is a separate system we can't post to, so
+                 the overseer applies through its form with these snippets.
+                 One per stage, because each stage reloads that page. -->
+            <tr v-if="insuranceId === s.id">
+              <td colspan="9" class="edit-row">
+                <div class="field-row">
+                  <div class="field" style="max-width:220px;"><label>Month 月份</label>
+                    <select v-model.number="insuranceMonthId">
+                      <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] ([[ m.state ]])</option>
+                    </select></div>
+                </div>
+                <p class="hint" v-if="insuranceLoading">Loading…</p>
+                <p class="error-text" v-if="insuranceError">[[ insuranceError ]]</p>
+                <template v-if="insurance && !insuranceLoading">
+                  <p class="error-text" v-for="w in insurance.warnings" v-bind:key="w" style="margin:2px 0;">[[ w ]]</p>
+                  <p class="hint" style="margin:6px 0;">
+                    <strong>[[ insurance.days.length ]] day(s), [[ insurance.total_hours ]]h</strong> committed for [[ insurance.month.year_month ]]:
+                    <span class="mono">[[ insurance.days.map(d => d.date + ' ' + d.start + '-' + d.end).join(' · ') ]]</span>
+                  </p>
+                  <p class="error-text" v-if="pendingSelectors.length" style="margin:6px 0;">
+                    Portal selectors not filled in yet: [[ pendingSelectors.join(', ') ]].
+                    Run the inspector on the hours form and fill them into
+                    <span class="mono">static/js/insurance-portal.js</span> — until then stage 3 won't find its fields.
+                  </p>
+                  <!-- Every portal stage is a postback, which wipes whatever
+                       was pasted into the console. A bookmarklet is
+                       re-injected by the browser on each click, so it doesn't
+                       care that the page reloaded — one click per day instead
+                       of reopening the console. Made once, kept: the code
+                       reads whichever student stage 1 parked. -->
+                  <div style="margin-top:10px; padding:8px; border:1px solid var(--rule); border-radius:8px;">
+                    <label style="display:block; color:var(--ink-2); font-size:12px;">Bookmarklet — drag to your bookmarks bar, once</label>
+                    <p class="hint" style="margin:2px 0;">The console is wiped by every reload; a bookmark isn't.
+                      After stages 1 and 2, click this once per day instead of pasting stage 3.</p>
+                    <p style="margin:6px 0;"><a v-bind:href="bookmarklet"
+                       v-on:click.prevent
+                       style="display:inline-block; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; font-size:12px; text-decoration:none; background:var(--rule-2);"
+                       title="Drag me to the bookmarks bar">OIA · fill next insurance day</a></p>
+                    <p class="hint" style="margin:2px 0;">Can't drag it? Make a bookmark by hand and paste this as the URL:</p>
+                    <textarea class="mono" rows="2" readonly v-bind:value="bookmarklet"
+                              style="width:100%; font-size:10px;" v-on:focus="$event.target.select()"></textarea>
+                  </div>
+                  <div v-for="step in insuranceSteps" v-bind:key="step.title" style="margin-top:10px;">
+                    <label style="display:block; color:var(--ink-2); font-size:12px;">[[ step.title ]]</label>
+                    <p class="hint" style="margin:2px 0;">[[ step.hint ]]</p>
+                    <textarea class="mono" rows="4" readonly v-bind:value="step.code"
+                              style="width:100%; font-size:11px;" v-on:focus="$event.target.select()"></textarea>
+                    <button type="button" class="secondary" v-on:click="copyCode(step)">
+                      [[ copiedStep === step.title ? 'Copied' : 'Copy' ]]</button>
+                  </div>
+                </template>
               </td>
             </tr>
           </template>
@@ -191,11 +262,20 @@
 </div>
 {% endblock %}
 {% block page_script %}
+<script src="{{ url_for('static', filename='js/insurance-portal.js') }}"></script>
 <script>
 const { createApp } = Vue;
 const PALETTE = {{ palette|tojson }};
 const SHAPES = {{ shapes|tojson }};
 const WORKER_TYPES = {{ worker_types|tojson }};
+const FUNDING_CATEGORIES = {{ funding_categories|tojson }};
+// What each funding source is called in the narrow table cell. Keyed by the
+// portal's own option value, so the full label stays the single definition in
+// models.py and only the abbreviation lives here.
+const FUNDING_SHORT = {
+  "0": "College", "1": "Scholarship (R&D)", "2": "On-campus",
+  "3": "MOE", "4": "NSTC", "5": "Gov. agency", "6": "Other",
+};
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
@@ -206,10 +286,44 @@ const app = createApp({
       // explicit Edit button — so a stray click or tab can't change a name.
       editingId: null, draft: {}, editError: "",
       selection: null,  // selection-progress summary for the month open for selection, if any
-      PALETTE, SHAPES, WORKER_TYPES,
+      // Insurance portal snippets — one student's panel open at a time, same
+      // as Edit, and on its own month so looking up next month's application
+      // doesn't move the dashboard below.
+      insuranceId: null, insuranceMonthId: null, insurance: null,
+      insuranceLoading: false, insuranceError: "", copiedStep: "",
+      PALETTE, SHAPES, WORKER_TYPES, FUNDING_CATEGORIES,
     };
   },
-  watch: { monthId() { this.load(); } },
+  computed: {
+    pendingSelectors() { return OIAInsurance.pendingSelectors(); },
+    // Student-agnostic — it reads whoever stage 1 parked — so the same
+    // bookmark keeps working for every student and every month.
+    bookmarklet() { return OIAInsurance.buildBookmarklet(false); },
+    insuranceSteps() {
+      if (!this.insurance) return [];
+      return [
+        { title: "Stage 1 — identify and Query",
+          hint: "Paste on the application form. Sets Identity and the national ID, then presses Query — the page will reload. Also parks this student's days for stage 3.",
+          code: OIAInsurance.buildLookup(this.insurance) },
+        { title: "Stage 2 — confirm and fill the job details",
+          hint: "Paste after the lookup. Checks the student the portal found against this record and refuses if they differ, then fills Activity Name and Funding. Press “Add Application Form and Fill in Hours” yourself.",
+          code: OIAInsurance.buildJob(this.insurance) },
+        { title: "Stage 3 — fill the next day",
+          hint: "Open the hours row, run this, check it, save. After the reload run it again for the next day — it advances by itself. Running it twice before saving re-fills the same day rather than skipping one. The bookmarklet above is the same code without the console.",
+          code: OIAInsurance.buildDay(false) },
+        { title: "Reset",
+          hint: "Clears the parked student. Use before starting a different one, or to restart the day list.",
+          code: OIAInsurance.buildReset() },
+        { title: "Field inspector",
+          hint: "Run once on the portal page to list every field's id and label — what the TODO selectors need.",
+          code: OIAInsurance.buildInspector() },
+      ];
+    },
+  },
+  watch: {
+    monthId() { this.load(); },
+    insuranceMonthId() { this.loadInsurance(); },
+  },
   async mounted() {
     await this.loadStudents();
     this.months = await OIA.api.get("/api/admin/months");
@@ -245,8 +359,61 @@ const app = createApp({
         chinese_name: s.chinese_name || "", english_name: s.english_name || "",
         student_id: s.student_id || "", insurance_number: s.insurance_number || "",
         worker_type: s.worker_type || "", colour: s.colour, shape: s.shape,
+        project_name: s.project_name || "",
+        // "0" is College, not "unset" — so compare against null, not falsiness.
+        funding_category: s.funding_category == null ? "" : s.funding_category,
         username: s.username || "", password: "",
       };
+    },
+    startInsurance(s) {
+      if (this.insuranceId === s.id) { this.insuranceId = null; return; }
+      this.insuranceId = s.id;
+      this.insurance = null;
+      this.insuranceError = "";
+      this.copiedStep = "";
+      // Default to the newest committed month — insurance is applied for once
+      // the schedule is confirmed. Falls back to whatever the dashboard is on.
+      const committed = this.months.find(m => m.state === "committed");
+      const wanted = committed ? committed.id : this.monthId;
+      // Assigning the same id again wouldn't fire the watcher, so load here
+      // when it hasn't changed.
+      if (this.insuranceMonthId === wanted) this.loadInsurance();
+      else this.insuranceMonthId = wanted;
+    },
+    async loadInsurance() {
+      if (!this.insuranceId || !this.insuranceMonthId) return;
+      this.insuranceLoading = true; this.insuranceError = ""; this.copiedStep = "";
+      const forStudent = this.insuranceId;
+      try {
+        const data = await OIA.api.get("/api/admin/students/" + forStudent
+          + "/insurance?month_id=" + this.insuranceMonthId);
+        // A slow response for a panel the overseer has since closed or
+        // switched away from must not overwrite the one they're looking at.
+        if (this.insuranceId === forStudent) this.insurance = data;
+      } catch (e) {
+        if (this.insuranceId === forStudent) {
+          this.insuranceError = (e.payload && e.payload.message) || e.message;
+        }
+      } finally {
+        this.insuranceLoading = false;
+      }
+    },
+    async copyCode(step) {
+      try {
+        await navigator.clipboard.writeText(step.code);
+        this.copiedStep = step.title;
+      } catch (e) {
+        // Clipboard access can be refused (insecure origin, permissions) —
+        // the snippet is in a textarea either way, so say so rather than fail
+        // silently.
+        this.insuranceError = "Couldn't copy automatically — select the box and copy by hand.";
+      }
+    },
+    fundingLabel(code) {
+      return code == null ? "" : (FUNDING_CATEGORIES[code] || "");
+    },
+    fundingShort(code) {
+      return code == null ? "—" : (FUNDING_SHORT[code] || code);
     },
     // Someone else in the same semester already wearing the draft's
     // colour × shape — tokens must stay unique, so saving is blocked.
@@ -264,7 +431,8 @@ const app = createApp({
       // Send only what changed, so an untouched field can never be the one
       // that fails validation.
       const changes = {};
-      ["chinese_name", "english_name", "student_id", "insurance_number", "worker_type", "colour", "shape"].forEach(f => {
+      ["chinese_name", "english_name", "student_id", "insurance_number", "worker_type",
+       "project_name", "funding_category", "colour", "shape"].forEach(f => {
         if ((d[f] || "").trim() !== (s[f] || "")) changes[f] = (d[f] || "").trim();
       });
       if (s.has_account) {
@@ -290,6 +458,7 @@ const app = createApp({
       const code = (e.payload && e.payload.error) || e.message;
       if (code === "student_id_taken") return "That student ID is already in use.";
       if (code === "invalid_student_id") return "Student ID: letters and numbers only.";
+      if (code === "invalid_funding_category") return "Pick a funding source from the list.";
       return (e.payload && e.payload.message) || e.message;
     },
     async sendInvite() {

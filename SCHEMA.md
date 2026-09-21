@@ -53,6 +53,8 @@ Roster period — the student list changes each semester.
 | shape | enum | circle / triangle / square / diamond |
 | insurance_number | varchar(32) null | 勞保 number; overseer-only, never sent to students |
 | worker_type | enum null | OW (Official Worker) / SW (Service Worker) / TA (Teaching Assistant); set by the overseer, null until set |
+| project_name | varchar(128) null | 計畫名稱 for the insurance portal; free text, overseer-only, null until set |
+| funding_category | varchar(1) null | 經費來源; stores the insurance portal's own `ddlJobCategory` option value, "0".."6" ("0" = College is a real choice, not "unset"); overseer-only, null until set |
 | line_user_id | text null | optional; only if individual DMs are enabled later |
 | is_active | bool | leaving mid-semester deactivates rather than deletes |
 | is_demo | bool | seeded demo row; **"Reset demo data" deletes only these** |

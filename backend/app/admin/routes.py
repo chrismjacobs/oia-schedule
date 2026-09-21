@@ -10,8 +10,10 @@ from app.extensions import db
 from app.models import (
     Semester, Student, User, Month, ClosedDate, SelectionWindow,
     RegularSlotTemplate, RegularSlot, Slot, Availability, AvailabilityOptOut,
+    Assignment, Schedule,
     SLOT_HOURS, MONTH_STATES, LEGACY_MONTH_STATES, REGULAR_SLOT_STATES,
     STUDENT_ID_RE, STUDENT_ID_MAX, STUDENT_PALETTE, STUDENT_SHAPES, WORKER_TYPES,
+    FUNDING_CATEGORIES, PROJECT_NAME_MAX,
     USERNAME_RE, normalize_username,
 )
 from app.utils.decorators import overseer_required
@@ -100,6 +102,8 @@ def list_students():
         # Overseer-only, so it's added here rather than in Student.to_dict(),
         # which is also what students receive in the roster/team views.
         d["insurance_number"] = s.insurance_number
+        d["project_name"] = s.project_name
+        d["funding_category"] = s.funding_category
         d["username"] = s.user.username if s.user else None
         out.append(d)
     return jsonify(out)
@@ -264,6 +268,26 @@ def update_student(student_id):
                             "message": "Insurance number is limited to 32 characters"}), 400
         new_insurance = raw or None
 
+    new_project_name = None
+    if "project_name" in data:
+        # Free text — the portal's own field is free text too, and a guessed
+        # pattern would only block a legitimate project title. Blank clears it.
+        raw = (data["project_name"] or "").strip()
+        if len(raw) > PROJECT_NAME_MAX:
+            return jsonify({"error": "project_name_too_long",
+                            "message": f"Project name is limited to {PROJECT_NAME_MAX} characters"}), 400
+        new_project_name = raw or None
+
+    new_funding = None
+    if "funding_category" in data:
+        # "0" (College) is a real choice, not "unset" — only an empty string
+        # clears it, so don't fold this into a falsiness check.
+        raw = (data["funding_category"] or "").strip()
+        if raw and raw not in FUNDING_CATEGORIES:
+            return jsonify({"error": "invalid_funding_category",
+                            "message": "Pick a funding source from the list"}), 400
+        new_funding = raw or None
+
     for field, value in new_names.items():
         setattr(student, field, value)
     if new_student_id is not None:
@@ -272,6 +296,10 @@ def update_student(student_id):
         student.insurance_number = new_insurance
     if "worker_type" in data:
         student.worker_type = new_worker_type
+    if "project_name" in data:
+        student.project_name = new_project_name
+    if "funding_category" in data:
+        student.funding_category = new_funding
     if new_username is not None:
         account.username = new_username
     if new_password is not None:
@@ -283,8 +311,127 @@ def update_student(student_id):
     db.session.commit()
     out = student.to_dict()
     out["insurance_number"] = student.insurance_number
+    out["project_name"] = student.project_name
+    out["funding_category"] = student.funding_category
     out["username"] = account.username if account else None
     return jsonify(out)
+
+
+# ---------------- Insurance ----------------
+
+def _insurance_days(student_id, month_id):
+    """The student's committed hours for the month, collapsed into one entry
+    per contiguous run — which is what the portal's "add times" stage asks
+    for: a day, a start and an end. Two runs on one day (a morning and an
+    afternoon) stay two entries, because that's two rows in the portal."""
+    rows = (
+        db.session.query(Slot.date, Slot.hour)
+        .join(Assignment, Assignment.slot_id == Slot.id)
+        .join(Schedule, Assignment.schedule_id == Schedule.id)
+        .filter(
+            Assignment.student_id == student_id,
+            Slot.month_id == month_id,
+            Schedule.status == "committed",
+        )
+        .order_by(Slot.date, Slot.hour)
+        .all()
+    )
+
+    by_date = defaultdict(list)
+    for d, hour in rows:
+        by_date[d].append(hour)
+
+    days = []
+    for d in sorted(by_date):
+        run = []
+        for hour in sorted(by_date[d]):
+            # The lunch break makes 11:00 and 13:00 non-contiguous on its own,
+            # so a plain +1 check is all the split this needs.
+            if run and hour == run[-1] + 1:
+                run.append(hour)
+            else:
+                if run:
+                    days.append(_day_entry(d, run))
+                run = [hour]
+        if run:
+            days.append(_day_entry(d, run))
+    return days
+
+
+def _day_entry(d, run):
+    return {
+        "date": d.isoformat(),
+        "weekday": d.isoweekday(),
+        "start": f"{run[0]:02d}:00",
+        "end": f"{run[-1] + 1:02d}:00",
+        "hours": len(run),
+    }
+
+
+@bp.get("/students/<int:student_id>/insurance")
+@overseer_required
+def student_insurance(student_id):
+    """Everything the insurance portal asks about one student for one month,
+    in one payload — so the console script the dashboard generates is filled
+    from here rather than scraped back out of the page.
+
+    Overseer-only, like the insurance number itself. Warnings are advisory:
+    a missing field is reported, never a reason to refuse the payload, since
+    the overseer may be filling the rest by hand."""
+    student = Student.query.get_or_404(student_id)
+
+    month_id = request.args.get("month_id", type=int)
+    month = Month.query.get(month_id) if month_id else None
+    if month_id and not month:
+        return jsonify({"error": "month_not_found"}), 404
+    if month is None:
+        # Default to the next month that has a committed schedule — insurance
+        # is applied for once the schedule is confirmed (CLAUDE.md §6).
+        month = (
+            Month.query.join(Schedule, Schedule.month_id == Month.id)
+            .filter(Schedule.status == "committed")
+            .order_by(Month.year_month.desc())
+            .first()
+        )
+    if month is None:
+        return jsonify({"error": "no_committed_month",
+                        "message": "No month has a committed schedule yet"}), 400
+
+    days = _insurance_days(student.id, month.id)
+
+    warnings = []
+    if not student.insurance_number:
+        warnings.append("No insurance number on record — the query step will need it typed in.")
+    if not student.project_name:
+        warnings.append("No project name set.")
+    if student.funding_category is None:
+        warnings.append("No funding source set.")
+    if not days:
+        warnings.append(f"No committed hours for {month.year_month}.")
+    # situation.txt: the 1st of a month can't be insured through the normal
+    # flow — it goes to Ms Betty by the 20th as a special request.
+    if any(d["date"].endswith("-01") for d in days):
+        warnings.append("Includes the 1st of the month — that day can't be applied for here; "
+                        "send name, ID and hours to Ms Betty by the 20th instead.")
+
+    return jsonify({
+        "student": {
+            "id": student.id,
+            "chinese_name": student.chinese_name,
+            "english_name": student.english_name,
+            "student_id": student.student_id,
+            "insurance_number": student.insurance_number,
+            "project_name": student.project_name,
+            "funding_category": student.funding_category,
+            "funding_label": FUNDING_CATEGORIES.get(student.funding_category),
+            "worker_type": student.worker_type,
+            "worker_type_label": WORKER_TYPES.get(student.worker_type),
+        },
+        "month": month.to_dict(),
+        "days": days,
+        "total_hours": sum(d["hours"] for d in days),
+        "warnings": warnings,
+    })
 
 
 # ---------------- Months ----------------
