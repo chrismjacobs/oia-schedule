@@ -1,8 +1,10 @@
+import csv
+import io
 from collections import defaultdict
 from datetime import datetime, date as date_cls
 from uuid import uuid4
 
-from flask import jsonify, request, current_app, session
+from flask import jsonify, request, current_app, session, Response
 from flask_login import current_user, login_user
 
 from app.admin import bp
@@ -23,7 +25,7 @@ from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
-from app.notifications.service import reset_notification, notify_selection_open
+from app.notifications.service import reset_notification, notify_selection_open, notify_month_report
 
 # The forward path through the cycle (CLAUDE.md #6). Used to label which move
 # is the "normal next step" in the UI — NOT to forbid anything. Going
@@ -839,6 +841,75 @@ def close_month(month_id):
     db.session.commit()
     report["month"] = month.to_dict()
     return jsonify(report)
+
+
+def _report_rows(month):
+    """The close-out report's per-student rows, joined to the overseer-only
+    student fields (insurance number, worker type) the reimbursement paperwork
+    needs. Demo students are left out — this file goes to the office as a
+    record of money owed, and a seeded name has no business on it."""
+    report = build_month_dashboard(month)
+    students = {s.id: s for s in Student.query.all()}
+    rows = []
+    for row in report["gap"]:
+        s = students.get(row["student_id"])
+        if s is None or s.is_demo:
+            continue
+        rows.append((s, row))
+    rows.sort(key=lambda pair: (pair[0].short_name or "").lower())
+    return rows
+
+
+@bp.get("/months/<int:month_id>/report.csv")
+@overseer_required
+def month_report_csv(month_id):
+    """The close-out report as a file, for the salary/insurance paperwork.
+
+    Built from the same build_month_dashboard() call the on-screen report
+    uses, so the file and the screen cannot disagree. The report itself is
+    derived, never stored (SCHEMA.md 'Derived values') — this download is the
+    only way a month's numbers leave the database.
+    """
+    month = Month.query.get_or_404(month_id)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Chinese name", "English name", "Student ID", "Insurance number",
+                "Worker type", "Scheduled hours", "Recorded hours", "Gap",
+                "No-shows", "Approved leave"])
+    for s, row in _report_rows(month):
+        w.writerow([
+            s.chinese_name, s.english_name, s.student_id,
+            s.insurance_number or "", s.worker_type or "",
+            row["scheduled_hours"], row["recorded_hours"], row["gap"],
+            row.get("no_shows", 0), row.get("leave_approved", 0),
+        ])
+
+    # utf-8-sig, not utf-8: Excel on Windows reads a bare UTF-8 CSV as the
+    # system codepage and turns every Chinese name into mojibake. The BOM is
+    # what makes the file open cleanly by double-click.
+    return Response(
+        buf.getvalue().encode("utf-8-sig"),
+        mimetype="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="oia-hours-{month.year_month}.csv"'},
+    )
+
+
+@bp.post("/months/<int:month_id>/report/notify")
+@overseer_required
+def month_report_notify(month_id):
+    """Post the month's hours summary to the student group, so students have
+    their own record of what was counted for them.
+
+    Overseer-triggered, never from /tick — a report goes out when the overseer
+    has finished checking it, not when a clock says so. notify_once dedups on
+    the month, so a second click is a no-op rather than a second push; a
+    previous *failed* attempt does retry.
+    """
+    month = Month.query.get_or_404(month_id)
+    sent = notify_month_report(month, _report_rows(month))
+    return jsonify({"ok": True, "sent": sent,
+                    "reason": None if sent else "already_sent"})
 
 
 # ---------------- Manual tick (session-authenticated, for testing —

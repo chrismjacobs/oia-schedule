@@ -66,6 +66,13 @@
         running and no-show detection switches on. No need to click anything.</span>
     </div>
 
+    <!-- The report is derived, never stored, so it can be pulled up for any
+         month at any time — closing isn't the only way to see it. -->
+    <p class="hint" v-if="!closeout" style="margin-bottom:10px;">
+      <button class="secondary" v-on:click="showReport" v-bind:disabled="busy">Month report 月報表</button>
+      <span style="margin-left:8px;">Hours per student, and the file for the salary/insurance paperwork.</span>
+    </p>
+
     <!-- Close-out: the report is the point of closing, so it's shown right here -->
     <div class="closeout" v-if="closeout">
       <h3>Close-out report [[ currentMonthYm ]]</h3>
@@ -76,21 +83,32 @@
         <div class="stat gap"><div class="k">Unscheduled sign-ins</div><div class="v mono">[[ closeout.signed_in_not_scheduled.length ]]</div></div>
       </div>
       <table class="data" style="margin-top:10px;">
-        <thead><tr><th>Student</th><th>Scheduled</th><th>Recorded</th><th>Gap</th></tr></thead>
+        <thead><tr><th>Student</th><th>Scheduled</th><th>Recorded</th><th>Gap</th><th>No-shows</th><th>Leave</th></tr></thead>
         <tbody>
           <tr v-for="row in closeout.gap" v-bind:key="row.student_id">
             <td>[[ row.student ? (row.student.chinese_name + ' ' + row.student.english_name) : '#' + row.student_id ]]</td>
             <td class="mono">[[ row.scheduled_hours ]]</td>
             <td class="mono">[[ row.recorded_hours ]]</td>
             <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
+            <td class="mono">[[ row.no_shows ]]</td>
+            <td class="mono">[[ row.leave_approved ]]</td>
           </tr>
         </tbody>
       </table>
       <p class="hint" style="margin-top:8px;">
         Leave: [[ closeout.leave_patterns.too_often.length ]] student(s) over the frequent-leave threshold,
         [[ closeout.leave_patterns.too_late.length ]] short-notice request(s).
+      </p>
+      <!-- Export row: the report is never stored, so these are the only ways
+           a month's numbers leave the database. -->
+      <p class="noprint" style="margin-top:10px;">
+        <a class="btn secondary" v-bind:href="'/api/admin/months/' + monthId + '/report.csv'">Download CSV</a>
+        <button class="secondary" style="margin-left:8px;" v-on:click="printReport">Print 列印</button>
+        <button class="secondary" style="margin-left:8px;" v-on:click="postReportToLine" v-bind:disabled="busy">
+          Post to LINE 傳到群組</button>
         <button class="secondary" style="margin-left:8px;" v-on:click="closeout = null">Dismiss</button>
       </p>
+      <p class="hint noprint" v-if="reportMessage">[[ reportMessage ]]</p>
     </div>
 
     <h3 style="margin-top:14px;">Scheduled open / close 自動開關時間</h3>
@@ -267,7 +285,7 @@ const app = createApp({
       busy: false, populateMessage: "", narrow: false, monthMessage: "",
       newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
       swOpens: "", swCloses: "", genMessage: "",
-      window: null, slotCount: null, closeout: null,
+      window: null, slotCount: null, closeout: null, reportMessage: "",
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
@@ -466,6 +484,29 @@ const app = createApp({
         this.monthMessage = e.message === "month_exists" ? "That month already exists."
           : e.message === "year_month_required" ? "Enter a month as YYYY-MM."
           : e.message;
+      } finally { this.busy = false; }
+    },
+    async showReport() {
+      // Same build_month_dashboard() the close-out uses — pulling it up early
+      // doesn't close the month or change anything.
+      this.busy = true; this.reportMessage = "";
+      try {
+        this.closeout = await OIA.api.get("/api/dashboard/months/" + this.monthId);
+      } catch (e) {
+        this.monthMessage = e.message;
+      } finally { this.busy = false; }
+    },
+    printReport() { window.print(); },
+    async postReportToLine() {
+      if (!confirm("Post the " + this.currentMonthYm + " hours summary to the student group?")) return;
+      this.busy = true; this.reportMessage = "";
+      try {
+        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/report/notify", {});
+        this.reportMessage = res.sent
+          ? "Posted to the group."
+          : "Already posted for " + this.currentMonthYm + " — not sent again.";
+      } catch (e) {
+        this.reportMessage = "Could not post: " + e.message;
       } finally { this.busy = false; }
     },
     async setMonthState(state) {

@@ -160,6 +160,31 @@ def notify_committed(month):
     )
 
 
+def notify_month_report(month, report_rows):
+    """The month's hours summary, posted to the group so students have their
+    own record of what was counted for them.
+
+    Overseer-triggered from the close-out panel, never from /tick. Takes the
+    same rows the CSV export writes, so the message, the file and the screen
+    all carry one set of numbers.
+
+    Deliberately factual and un-named beyond the hours: a shortfall shows as a
+    number, not as an accusation in front of the whole group (CLAUDE.md #12
+    asks for the no-show wording to stay gentle, and this is read by everyone).
+    """
+    lines = [f"[OIA] Hours summary for {month.year_month}"]
+    for student, row in report_rows:
+        gap = row["gap"]
+        note = f" (short {gap}h)" if gap > 0 else (f" (+{-gap}h)" if gap < 0 else "")
+        lines.append(
+            f"{student.display_name()}: scheduled {row['scheduled_hours']}h, "
+            f"recorded {row['recorded_hours']}h{note}")
+    if len(lines) == 1:
+        lines.append("No hours recorded this month.")
+    lines.append("Please check your own total and tell the office about anything wrong.")
+    return notify_once("month_report", "group", "month", month.id, "\n".join(lines))
+
+
 def notify_leave_requested(leave_requests):
     """Fires the moment a student submits a leave request — before it's
     approved. Deliberately generic (no name, no reason): it flags the

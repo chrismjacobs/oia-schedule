@@ -518,3 +518,20 @@ table.data td.edit-row .field label { color: var(--ink-2); }
 .badge.ok { background: #E7F0EB; color: var(--ok); }
 
 footer.app-footer { text-align: center; font-size: 10px; color: var(--ink-3); margin-top: 26px; letter-spacing: .04em; padding: 0 16px; }
+
+/* ---- Print: the month report only ----
+   The close-out report is the one thing anyone prints — it's the hours
+   record that goes with the salary and insurance paperwork. Rather than a
+   second template, print hides the whole page and re-shows just that panel.
+   visibility (not display) is what keeps the report's ancestors laid out, so
+   it doesn't need every wrapper tagged. */
+@media print {
+  body { visibility: hidden; background: #fff; }
+  .closeout, .closeout * { visibility: visible; }
+  .closeout { position: absolute; left: 0; top: 0; width: 100%; }
+  .noprint { display: none !important; }
+  /* Badges are colour-coded on screen; on paper (often mono) the number
+     alone has to carry it, so drop the fill and keep the digits black. */
+  .closeout .badge { background: none !important; color: #000 !important; }
+  .closeout table.data th, .closeout table.data td { border-color: #999; }
+}

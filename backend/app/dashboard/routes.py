@@ -101,6 +101,16 @@ def build_month_dashboard(month):
         for lr in leave_rows if lr.lead_time_hours is not None and lr.lead_time_hours < too_late_threshold
     ]
 
+    # Per-student no-show and approved-leave counts, folded into the same gap
+    # rows the screen, the CSV export and the LINE summary all read — so the
+    # three can never disagree about a number that ends up on a payslip.
+    no_show_count = defaultdict(int)
+    for ns in no_shows:
+        no_show_count[ns["student_id"]] += 1
+    for row in gap_rows:
+        row["no_shows"] = no_show_count.get(row["student_id"], 0)
+        row["leave_approved"] = approved_count.get(row["student_id"], 0)
+
     assigned_slot_ids = {a.slot_id for a in assignments}
     uncovered = [s.to_dict() for s in slots if s.id not in assigned_slot_ids]
 
