@@ -60,21 +60,45 @@ def _load_inputs(month_id):
 
 def _load_regular_locks(month_id, slots, offered):
     """{slot_id: student_id} for regular hours the student actually offered
-    this month (never assign an hour a student didn't select)."""
-    slot_id_by_date_hour = {(s.date, s.hour): s.id for s in slots}
+    this month (never assign an hour a student didn't select).
+
+    Keyed by lane as well as date and hour: an hour staffed in both lanes has
+    two slots, and without the lane one of them would silently shadow the
+    other, so half the standing arrangements would never be locked in."""
+    slot_id_by_cell = {(s.date, s.hour, s.track): s.id for s in slots}
     locked = {}
     for r in RegularSlot.query.filter_by(month_id=month_id, state="assigned").all():
-        slot_id = slot_id_by_date_hour.get((r.date, r.hour))
+        slot_id = slot_id_by_cell.get((r.date, r.hour, r.track))
         if r.student_id and slot_id and slot_id in offered.get(r.student_id, ()):
             locked[slot_id] = r.student_id
     return locked
 
 
+def _load_tracks(student_ids):
+    """{student_id: track} for the students in play."""
+    from app.models import Student
+    from app.utils.tracks import track_for, DEFAULT_TRACK
+    if not student_ids:
+        return {}
+    rows = Student.query.filter(Student.id.in_(list(student_ids))).all()
+    out = {s.id: track_for(s) for s in rows}
+    return {sid: out.get(sid, DEFAULT_TRACK) for sid in student_ids}
+
+
 def _half_days(slots):
-    """{(date, period): [slots in hour order]} — the windows a session lives in."""
+    """{(date, period, track): [slots in hour order]} — the windows a session
+    lives in.
+
+    The lane is part of the key and has to be. Two lanes put two slots on the
+    same hour, and the run-building below tests contiguity with
+    `s.hour == cur[-1].hour + 1` — so a bucket holding both lanes' 08:00 fails
+    that test at every step and shreds every run into single hours. A four
+    hour morning would come out as four one-hour sessions for four different
+    students, which is exactly the allocation CLAUDE.md #7 says not to go back
+    to."""
     out = defaultdict(list)
     for s in slots:
-        out[(s.date, s.period)].append(s)
+        out[(s.date, s.period, s.track)].append(s)
     for v in out.values():
         v.sort(key=lambda s: s.hour)
     return out
@@ -124,6 +148,7 @@ def solve_month(month_id, weights, floor_hours, rules=None, time_limit_seconds=2
 
     slot_by_id = {s.id: s for s in slots}
     students = sorted(offered)
+    track_by_student = _load_tracks(students)
     candidates = _candidate_sessions(slots, offered, rules)
 
     model = cp_model.CpModel()
@@ -133,7 +158,10 @@ def solve_month(month_id, weights, floor_hours, rules=None, time_limit_seconds=2
     # their chosen sessions covers it.
     covering = defaultdict(list)            # (student, slot) -> [z]
     per_half_day = defaultdict(list)        # (student, date, period) -> [z]
-    for var, (student_id, (d, period), slot_ids) in zip(z, candidates):
+    for var, (student_id, (d, period, _track), slot_ids) in zip(z, candidates):
+        # Keyed without the lane on purpose: a student works one lane, so this
+        # is already one session per student per half-day, and leaving the lane
+        # out keeps it that way even if a student ever straddled both.
         per_half_day[(student_id, d, period)].append(var)
         for slot_id in slot_ids:
             covering[(student_id, slot_id)].append(var)
@@ -217,9 +245,12 @@ def solve_month(month_id, weights, floor_hours, rules=None, time_limit_seconds=2
 
     # 6. Low churn: the same weekday/hour switching on/off across consecutive
     # ISO weeks. What lets a 2-on/2-off rotation emerge — never scripted.
-    weekday_hour_week = defaultdict(dict)  # (weekday, hour) -> {iso week: slot_id}
+    # Lane included: without it, the two lanes' slots for one weekday/hour
+    # share a bucket and each week keeps only whichever was seen last, so
+    # half the consistency signal would quietly vanish.
+    weekday_hour_week = defaultdict(dict)  # (weekday, hour, track) -> {iso week: slot_id}
     for s in slots:
-        weekday_hour_week[(s.date.weekday(), s.hour)][s.date.isocalendar()[1]] = s.id
+        weekday_hour_week[(s.date.weekday(), s.hour, s.track)][s.date.isocalendar()[1]] = s.id
     churn = []
     for student_id in students:
         for week_map in weekday_hour_week.values():
@@ -235,14 +266,23 @@ def solve_month(month_id, weights, floor_hours, rules=None, time_limit_seconds=2
     if churn:
         terms.append(-weights["low_churn"] * sum(churn))
 
-    # 7. Equalise hours among students who offered anything.
-    if len(students) > 1:
-        top = max(len(v) for v in offered.values())
-        hi = model.NewIntVar(0, top, "max_hours")
-        lo = model.NewIntVar(0, top, "min_hours")
-        for h in hours.values():
-            model.Add(h <= hi)
-            model.Add(h >= lo)
+    # 7. Equalise hours among students who offered anything — within a lane,
+    #    not across them. Paid and unpaid workers offer very different volumes
+    #    and are staffed for different reasons, so one shared spread would pull
+    #    the paid allocations toward the unpaid ones and quietly undercut the
+    #    students who rely on the pay.
+    students_by_track = defaultdict(list)
+    for student_id in students:
+        students_by_track[track_by_student[student_id]].append(student_id)
+    for track, ids in sorted(students_by_track.items()):
+        if len(ids) < 2:
+            continue
+        top = max(len(offered[sid]) for sid in ids)
+        hi = model.NewIntVar(0, top, f"max_hours_{track}")
+        lo = model.NewIntVar(0, top, f"min_hours_{track}")
+        for sid in ids:
+            model.Add(hours[sid] <= hi)
+            model.Add(hours[sid] >= lo)
         terms.append(-weights["equalise_hours"] * (hi - lo))
 
     model.Maximize(sum(terms))

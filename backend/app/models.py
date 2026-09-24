@@ -263,12 +263,17 @@ class Slot(db.Model):
     hour = db.Column(db.Integer, nullable=False)
     period = db.Column(db.String(16), nullable=False)  # morning | afternoon
     state = db.Column(db.String(16), nullable=False, default="open")  # open|assigned|reopened
+    # Which worker lane this seat belongs to — a TRACKS key (app/utils/tracks.py).
+    # An hour staffed by both a paid and an unpaid worker is two slot rows, not
+    # one slot holding two people, so the one-student-per-slot rule below and
+    # everything downstream of it still holds exactly.
+    track = db.Column(db.String(2), nullable=False, default="OW", server_default="OW")
 
     month = db.relationship("Month", back_populates="slots")
     availabilities = db.relationship("Availability", back_populates="slot")
     assignments = db.relationship("Assignment", back_populates="slot")
 
-    __table_args__ = (db.UniqueConstraint("date", "hour", name="uq_slot_date_hour"),)
+    __table_args__ = (db.UniqueConstraint("date", "hour", "track", name="uq_slot_date_hour_track"),)
 
     def to_dict(self):
         return {
@@ -277,6 +282,7 @@ class Slot(db.Model):
             "hour": self.hour,
             "period": self.period,
             "state": self.state,
+            "track": self.track,
         }
 
 
@@ -291,10 +297,14 @@ class RegularSlotTemplate(db.Model):
     hour = db.Column(db.Integer, nullable=False)
     state = db.Column(db.String(16), nullable=False, default="unassigned")  # unavailable|unassigned|assigned
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)  # only when state=assigned
+    # The lane this cell belongs to — a TRACKS key. Each lane is edited as its
+    # own grid; the SW lane is opt-in, so an hour with no SW row means no SW.
+    track = db.Column(db.String(2), nullable=False, default="OW", server_default="OW")
 
     student = db.relationship("Student")
 
-    __table_args__ = (db.UniqueConstraint("weekday", "hour", name="uq_regular_template_weekday_hour"),)
+    __table_args__ = (db.UniqueConstraint("weekday", "hour", "track",
+                                          name="uq_regular_template_weekday_hour_track"),)
 
     def to_dict(self):
         return {
@@ -303,6 +313,7 @@ class RegularSlotTemplate(db.Model):
             "hour": self.hour,
             "state": self.state,
             "student_id": self.student_id,
+            "track": self.track,
         }
 
 
@@ -322,11 +333,14 @@ class RegularSlot(db.Model):
     hour = db.Column(db.Integer, nullable=False)
     state = db.Column(db.String(16), nullable=False, default="unassigned")  # unavailable|unassigned|assigned
     student_id = db.Column(db.Integer, db.ForeignKey("student.id"), nullable=True)  # only when state=assigned
+    # The lane this cell belongs to — a TRACKS key. In the SW lane, no row at
+    # all means the office wants no service worker that hour (TRACK_DEFAULT_ON).
+    track = db.Column(db.String(2), nullable=False, default="OW", server_default="OW")
 
     month = db.relationship("Month")
     student = db.relationship("Student")
 
-    __table_args__ = (db.UniqueConstraint("date", "hour", name="uq_regular_slot_date_hour"),)
+    __table_args__ = (db.UniqueConstraint("date", "hour", "track", name="uq_regular_slot_date_hour_track"),)
 
     def to_dict(self):
         return {
@@ -336,6 +350,7 @@ class RegularSlot(db.Model):
             "hour": self.hour,
             "state": self.state,
             "student_id": self.student_id,
+            "track": self.track,
         }
 
 

@@ -21,7 +21,10 @@ from app.models import (
 from app.utils.decorators import overseer_required
 from app.utils.settings import get_setting, set_setting, get_solver_weights, get_session_rules
 from app.utils.periods import weekdays_in_month
-from app.utils.slot_sync import sync_month_slots, month_has_slots
+from app.utils.slot_sync import (
+    sync_month_slots, month_has_slots, AvailabilityLossRefused, MAX_LOST_DEFAULT,
+)
+from app.utils.tracks import TRACKS, DEFAULT_TRACK, TRACK_DEFAULT_ON, track_for
 from app.dashboard.routes import build_month_dashboard
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
@@ -38,6 +41,7 @@ from app.notifications.service import reset_notification, notify_selection_open,
 # digits) are shorter than that, and the overseer must be able to re-set one.
 OVERSEER_SET_PASSWORD_MIN = 6
 
+
 MONTH_FORWARD = {
     "setup": "selection_open",
     "selection_open": "selection_closed",
@@ -48,6 +52,38 @@ MONTH_FORWARD = {
     "running": "closed",
     "closed": None,
 }
+
+
+@bp.errorhandler(AvailabilityLossRefused)
+def _availability_loss_refused(err):
+    """A plan change that would take selections off a lot of students stops
+    here, with nothing committed.
+
+    Every route that changes the plan syncs the month's slots as part of the
+    same request, so any of them can reach this. Refusing by exception rather
+    than per-route means the whole operation is undone together — the closed
+    date or regular-slot edit that triggered it isn't saved either, so the
+    overseer is never left with a half-applied change to reason about.
+    """
+    current_app.logger.warning(
+        "slot sync REFUSED — would drop selections for %d student(s): %s",
+        len(err.lost_picks), err.lost_picks)
+    return jsonify({
+        "error": "would_lose_availability",
+        "message": ("This would delete saved hours for "
+                    f"{len(err.lost_picks)} students. Nothing has been changed."),
+        "lost_picks": err.lost_picks,
+        "slots": err.slots,
+        "confirm_with": "confirm=true",
+    }), 409
+
+
+def _sync_confirmed():
+    """Has the overseer already been shown what a sync would drop, and said
+    yes? Sent back as confirm=true on the retry of a refused request."""
+    if (request.args.get("confirm") or "").lower() in ("1", "true", "yes"):
+        return True
+    return bool((request.get_json(silent=True) or {}).get("confirm"))
 
 
 # ---------------- Semesters ----------------
@@ -557,7 +593,7 @@ def _sync_if_built(month):
     building slots is its own deliberate step."""
     if month is None or not month_has_slots(month):
         return None
-    return sync_month_slots(month)
+    return sync_month_slots(month, max_lost=None if _sync_confirmed() else MAX_LOST_DEFAULT)
 
 
 # ---------------- Selection window ----------------
@@ -624,6 +660,23 @@ def get_regular_template():
     return jsonify([r.to_dict() for r in rows])
 
 
+def _cell_track(data):
+    """The lane a regular-schedule edit applies to. Absent means the paid
+    lane, which is what every row was before lanes existed."""
+    track = (data.get("track") or DEFAULT_TRACK).upper()
+    return track if track in TRACKS else None
+
+
+def _student_in_track(student_id, track):
+    """A lane is the worker type, strictly — an OW can't hold an SW hour.
+    Checked here so a bad request can't write a cross-lane standing claim the
+    solver would then try to honour."""
+    student = Student.query.get(student_id)
+    if student is None:
+        return False
+    return track_for(student) == track
+
+
 @bp.put("/regular-template/cell")
 @overseer_required
 def set_regular_template_cell():
@@ -631,20 +684,44 @@ def set_regular_template_cell():
     weekday = data.get("weekday")
     hour = data.get("hour")
     state = data.get("state")
-    if weekday is None or hour is None or state not in REGULAR_SLOT_STATES:
+    track = _cell_track(data)
+    if weekday is None or hour is None or state not in REGULAR_SLOT_STATES or track is None:
         return jsonify({"error": "invalid_cell"}), 400
     student_id = data.get("student_id") if state == "assigned" else None
     if state == "assigned" and not student_id:
         return jsonify({"error": "student_id_required"}), 400
+    if student_id and not _student_in_track(student_id, track):
+        return jsonify({"error": "wrong_track",
+                        "message": f"That student doesn't work the {TRACKS[track]} lane"}), 400
 
-    row = RegularSlotTemplate.query.filter_by(weekday=weekday, hour=hour).first()
+    row = RegularSlotTemplate.query.filter_by(weekday=weekday, hour=hour, track=track).first()
     if not row:
-        row = RegularSlotTemplate(weekday=weekday, hour=hour)
+        row = RegularSlotTemplate(weekday=weekday, hour=hour, track=track)
         db.session.add(row)
     row.state = state
     row.student_id = student_id
     db.session.commit()
     return jsonify(row.to_dict())
+
+
+@bp.delete("/regular-template/cell")
+@overseer_required
+def clear_regular_template_cell():
+    """Remove a cell from the pattern entirely.
+
+    Not the same as marking it unavailable. In the SW lane an absent row means
+    "the office wants no service worker this hour", which is the normal state
+    for most of the week — without a way to delete, an SW cell could only ever
+    be added, never taken back out."""
+    data = request.get_json(force=True) or {}
+    track = _cell_track(data)
+    row = RegularSlotTemplate.query.filter_by(
+        weekday=data.get("weekday"), hour=data.get("hour"), track=track).first()
+    if not row:
+        return jsonify({"ok": True, "deleted": False})
+    db.session.delete(row)
+    db.session.commit()
+    return jsonify({"ok": True, "deleted": True})
 
 
 def _month_weekdays_minus_closed(month):
@@ -673,27 +750,47 @@ def populate_regular_slots(month_id):
     """
     month = Month.query.get_or_404(month_id)
     resync = bool((request.get_json(silent=True) or {}).get("resync"))
-    template_by_key = {(t.weekday, t.hour): t for t in RegularSlotTemplate.query.all()}
-    existing = {(r.date, r.hour): r for r in RegularSlot.query.filter_by(month_id=month.id).all()}
+    template_by_key = {(t.weekday, t.hour, t.track): t for t in RegularSlotTemplate.query.all()}
+    existing = {(r.date, r.hour, r.track): r for r in RegularSlot.query.filter_by(month_id=month.id).all()}
 
-    created = updated = 0
+    created = updated = deleted = 0
+    wanted = set()
     for d in _month_weekdays_minus_closed(month):
         for hour in SLOT_HOURS:
-            tmpl = template_by_key.get((d.weekday(), hour))
-            state = tmpl.state if tmpl else "unassigned"
-            student_id = tmpl.student_id if tmpl and tmpl.state == "assigned" else None
-            row = existing.get((d, hour))
-            if row is None:
-                db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour,
-                                            state=state, student_id=student_id))
-                created += 1
-            elif resync and (row.state, row.student_id) != (state, student_id):
-                row.state, row.student_id = state, student_id
-                updated += 1
+            for track, default_on in TRACK_DEFAULT_ON.items():
+                tmpl = template_by_key.get((d.weekday(), hour, track))
+                if tmpl is None and not default_on:
+                    # The SW lane is opt-in: no template cell means the office
+                    # wants no service worker that hour. Writing an
+                    # "unassigned" row instead would ask the solver to staff
+                    # every hour of the month in both lanes.
+                    continue
+                wanted.add((d, hour, track))
+                state = tmpl.state if tmpl else "unassigned"
+                student_id = tmpl.student_id if tmpl and tmpl.state == "assigned" else None
+                row = existing.get((d, hour, track))
+                if row is None:
+                    db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour, track=track,
+                                                state=state, student_id=student_id))
+                    created += 1
+                elif resync and (row.state, row.student_id) != (state, student_id):
+                    row.state, row.student_id = state, student_id
+                    updated += 1
+
+    if resync:
+        # A resync is "make this month match the template". An opt-in lane can
+        # lose a cell, and leaving the month's copy behind would keep staffing
+        # an hour the pattern no longer asks for.
+        for key, row in existing.items():
+            if key not in wanted:
+                db.session.delete(row)
+                deleted += 1
+
     db.session.flush()
     sync = _sync_if_built(month)
     db.session.commit()
-    return jsonify({"created": created, "updated": updated, "resync": resync, "slot_sync": sync}), 201
+    return jsonify({"created": created, "updated": updated, "deleted": deleted,
+                    "resync": resync, "slot_sync": sync}), 201
 
 
 @bp.get("/months/<int:month_id>/regular-slots")
@@ -715,12 +812,30 @@ def update_regular_slot(regular_slot_id):
     student_id = data.get("student_id") if state == "assigned" else None
     if state == "assigned" and not student_id:
         return jsonify({"error": "student_id_required"}), 400
+    if student_id and not _student_in_track(student_id, row.track):
+        return jsonify({"error": "wrong_track",
+                        "message": f"That student doesn't work the {TRACKS[row.track]} lane"}), 400
     row.state = state
     row.student_id = student_id
     db.session.flush()
     sync = _sync_if_built(row.month)
     db.session.commit()
     return jsonify(dict(row.to_dict(), slot_sync=sync))
+
+
+@bp.delete("/regular-slots/<int:regular_slot_id>")
+@overseer_required
+def delete_regular_slot(regular_slot_id):
+    """Take an hour out of a lane for this month — the "no service worker
+    this hour" action. In the SW lane an absent row is the normal state, so
+    marking it unavailable isn't the same thing and isn't enough."""
+    row = RegularSlot.query.get_or_404(regular_slot_id)
+    month = row.month
+    db.session.delete(row)
+    db.session.flush()
+    sync = _sync_if_built(month)
+    db.session.commit()
+    return jsonify({"ok": True, "slot_sync": sync})
 
 
 # ---------------- Selection progress (who has answered for a month) ----------------
@@ -739,12 +854,12 @@ def selection_progress(month_id):
     one belonging to someone who hasn't answered yet is still undecided."""
     month = Month.query.get_or_404(month_id)
     slots = Slot.query.filter_by(month_id=month.id).all()
-    slot_id_by_key = {(s.date, s.hour): s.id for s in slots}
+    slot_id_by_key = {(s.date, s.hour, s.track): s.id for s in slots}
     month_slot_ids = list(slot_id_by_key.values())
 
     regular = defaultdict(set)   # student -> {slot_id} of their regular hours
     for r in RegularSlot.query.filter_by(month_id=month.id, state="assigned").all():
-        slot_id = slot_id_by_key.get((r.date, r.hour))
+        slot_id = slot_id_by_key.get((r.date, r.hour, r.track))
         if r.student_id and slot_id:
             regular[r.student_id].add(slot_id)
 
@@ -822,7 +937,7 @@ def generate_slots(month_id):
     slots and every student's selections to apply any change. Sync replaces
     it: it only touches hours whose place in the plan changed."""
     month = Month.query.get_or_404(month_id)
-    summary = sync_month_slots(month)
+    summary = sync_month_slots(month, max_lost=None if _sync_confirmed() else MAX_LOST_DEFAULT)
     db.session.commit()
     current_app.logger.info("slot sync for %s: %s", month.year_month, summary)
     return jsonify(summary), 201

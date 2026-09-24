@@ -8,6 +8,7 @@ from app.models import (
 )
 from app.utils.decorators import login_required_api
 from app.utils.periods import weekdays_in_month
+from app.utils.tracks import track_for, DEFAULT_TRACK
 from app.utils.tz import local_now
 
 
@@ -42,8 +43,14 @@ def get_availability(month_id):
     template 'unavailable' hours come back with slot_id=null so the grid can
     still show them (greyed out) instead of silently omitting the column."""
     month = Month.query.get_or_404(month_id)
+    # One lane's worth of grid. A student works either the paid or the unpaid
+    # lane, never both, so they only ever see and tick their own lane's slots.
+    # That also keeps this grid one cell per (date, hour) — the two lanes are
+    # merged only on the overseer's views, never here.
+    my_track = track_for(current_user.student) if current_user.student_id else DEFAULT_TRACK
     slot_by_date_hour = {
-        (s.date, s.hour): s for s in Slot.query.filter_by(month_id=month.id).all()
+        (s.date, s.hour): s for s in Slot.query.filter_by(
+            month_id=month.id, track=my_track).all()
     }
 
     year, mon = (int(x) for x in month.year_month.split("-"))
@@ -66,7 +73,8 @@ def get_availability(month_id):
         has_existing = len(mine) > 0
         regular_mine = {
             (r.date, r.hour) for r in RegularSlot.query.filter_by(
-                month_id=month.id, state="assigned", student_id=current_user.student_id
+                month_id=month.id, state="assigned", student_id=current_user.student_id,
+                track=my_track
             ).all()
         }
 
@@ -75,7 +83,8 @@ def get_availability(month_id):
     # availability this month without it", i.e. confirmed uncovered, not just
     # not-yet-decided. A student who hasn't saved anything yet this month
     # isn't "declined" — they just haven't gotten to it.
-    regular_rows = RegularSlot.query.filter_by(month_id=month.id, state="assigned").all()
+    regular_rows = RegularSlot.query.filter_by(
+        month_id=month.id, state="assigned", track=my_track).all()
     regular_by_date_hour = {(r.date, r.hour): r.student_id for r in regular_rows if r.student_id}
     regular_student_ids = set(regular_by_date_hour.values())
     saved_student_ids, avail_pairs = set(), set()
@@ -172,13 +181,21 @@ def set_availability(month_id):
     data = request.get_json(force=True) or {}
     slot_ids = set(data.get("slot_ids") or [])
 
-    valid_slot_ids = {s.id for s in Slot.query.filter_by(month_id=month.id).all()}
+    # Their own lane only — a student cannot offer hours in the lane they
+    # don't work, whatever the request body says.
+    my_track = track_for(current_user.student)
+    valid_slot_ids = {s.id for s in Slot.query.filter_by(
+        month_id=month.id, track=my_track).all()}
     if not slot_ids.issubset(valid_slot_ids):
         return jsonify({"error": "invalid_slot_ids"}), 400
 
+    # Cleared across both lanes, not just theirs: if a student is moved
+    # between lanes mid-month, the rows they left behind in the old one would
+    # otherwise linger and still count as offered hours.
+    month_slot_ids = {s.id for s in Slot.query.filter_by(month_id=month.id).all()}
     Availability.query.filter(
         Availability.student_id == current_user.student_id,
-        Availability.slot_id.in_(valid_slot_ids),
+        Availability.slot_id.in_(month_slot_ids),
     ).delete(synchronize_session=False)
 
     for sid in slot_ids:
