@@ -165,6 +165,55 @@ def test_sync_proceeds_once_confirmed(app):
     assert Availability.query.count() == 0
 
 
+def _as_overseer(app):
+    from app.models import User
+    admin = User(username="boss", role="overseer")
+    admin.set_password("x")
+    db.session.add(admin)
+    db.session.commit()
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(admin.id)
+        sess["_fresh"] = True
+    return client
+
+
+def test_generate_slots_refuses_then_obeys_confirmation(app):
+    """The October safeguard, end to end.
+
+    A plan change that would empty the month must come back as a refusal with
+    the selections still there, and go through only when the overseer sends
+    the confirmation back.
+    """
+    month = make_month()
+    db.session.flush()
+    sync_month_slots(month)
+    db.session.commit()
+    slots = Slot.query.filter_by(month_id=month.id).all()
+    for n in range(1, 5):
+        s = make_student(n, "OW")
+        for slot in slots[:6]:
+            db.session.add(Availability(student_id=s.id, slot_id=slot.id))
+    for d in {s.date for s in slots}:
+        db.session.add(ClosedDate(month_id=month.id, date=d, reason="all shut"))
+    db.session.commit()
+    before = Availability.query.count()
+    assert before > 0
+
+    client = _as_overseer(app)
+
+    res = client.post(f"/api/admin/months/{month.id}/generate-slots")
+    assert res.status_code == 409
+    body = res.get_json()
+    assert body["error"] == "would_lose_availability"
+    assert len(body["lost_picks"]) == 4
+    assert Availability.query.count() == before, "the refusal changed nothing"
+
+    res = client.post(f"/api/admin/months/{month.id}/generate-slots?confirm=true")
+    assert res.status_code == 201
+    assert Availability.query.count() == 0
+
+
 # ------------------------------------------------------------------ solver
 
 def test_half_days_keep_runs_intact_across_lanes(app):

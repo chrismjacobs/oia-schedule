@@ -470,17 +470,21 @@ const app = createApp({
       // twice, and in the paid one means something else entirely.
       if (value === "none") {
         if (!row) return;
-        const res = await OIA.api.del("/api/admin/regular-slots/" + row.id);
+        const res = await this.withLossConfirm(confirmed => OIA.api.del(
+          "/api/admin/regular-slots/" + row.id + (confirmed ? "?confirm=true" : "")));
+        if (res === null) { await this.reloadRegularSlots(); return; }
         this.regularSlots = this.regularSlots.filter(r => r.id !== row.id);
         await this.showSync(res.slot_sync, "grid");
         return;
       }
 
-      const updated = row
-        ? await OIA.api.patch("/api/admin/regular-slots/" + row.id,
-                              { state, student_id: studentId })
-        : await OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots",
-                             { date: d, hour: h, state, track: this.lane, student_id: studentId });
+      const updated = await this.withLossConfirm(confirmed => row
+        ? OIA.api.patch("/api/admin/regular-slots/" + row.id,
+                        { state, student_id: studentId, confirm: confirmed })
+        : OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots",
+                       { date: d, hour: h, state, track: this.lane,
+                         student_id: studentId, confirm: confirmed }));
+      if (updated === null) { await this.reloadRegularSlots(); return; }
       this.regularSlots = this.regularSlots
         .filter(r => r.id !== updated.id).concat([updated]);
       await this.showSync(updated.slot_sync, "grid");
@@ -505,8 +509,10 @@ const app = createApp({
       }
       this.busy = true; this.populateMessage = "";
       try {
-        const res = await OIA.api.post(
-          "/api/admin/months/" + this.monthId + "/regular-slots/populate", { resync: !!resync });
+        const res = await this.withLossConfirm(confirmed => OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/regular-slots/populate",
+          { resync: !!resync, confirm: confirmed }));
+        if (res === null) { this.populateMessage = "Cancelled — nothing changed."; return; }
         this.populateMessage = resync
           ? "Added " + res.created + ", updated " + res.updated + " cell(s) from the template."
           : "Added " + res.created + " missing cell(s)." +
@@ -602,7 +608,10 @@ const app = createApp({
     async addClosedDate() {
       this.monthMessage = "";
       try {
-        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/closed-dates", this.newClosedDate);
+        const res = await this.withLossConfirm(confirmed => OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/closed-dates",
+          Object.assign({}, this.newClosedDate, { confirm: confirmed })));
+        if (res === null) { this.monthMessage = "Cancelled — nothing changed."; return; }
         this.newClosedDate = { date: "", reason: "" };
         await this.loadMonthDetail();
         await this.showSync(res.slot_sync, "setup");
@@ -614,7 +623,9 @@ const app = createApp({
     async removeClosedDate(id) {
       this.monthMessage = "";
       try {
-        const res = await OIA.api.del("/api/admin/closed-dates/" + id);
+        const res = await this.withLossConfirm(confirmed => OIA.api.del(
+          "/api/admin/closed-dates/" + id + (confirmed ? "?confirm=true" : "")));
+        if (res === null) return;
         await this.loadMonthDetail();
         await this.showSync(res.slot_sync, "setup");
       } catch (e) { this.monthMessage = e.message; }
@@ -628,10 +639,35 @@ const app = createApp({
         this.monthMessage = "Selection window saved.";
       } catch (e) { this.monthMessage = e.message; }
     },
+    // A plan change that would take saved hours off more than a couple of
+    // students is refused by the server with nothing committed. Show exactly
+    // whose hours would go, and only retry if the overseer says so — losing a
+    // month of student answers is the thing this guard exists to prevent, so
+    // it must never happen on one click.
+    async reloadRegularSlots() {
+      this.regularSlots = await OIA.api.get(
+        "/api/admin/months/" + this.monthId + "/regular-slots");
+    },
+    async withLossConfirm(run) {
+      try {
+        return await run(false);
+      } catch (e) {
+        const p = e.payload;
+        if (!p || p.error !== "would_lose_availability") throw e;
+        const who = p.lost_picks.map(x => x.student + " (" + x.hours + "h)").join("\n  ");
+        const ok = confirm(
+          "This would delete saved hours for " + p.lost_picks.length + " student(s):\n\n  " +
+          who + "\n\nNothing has been changed yet. Delete those hours and continue?");
+        if (!ok) return null;
+        return await run(true);
+      }
+    },
     async generateSlots() {
       this.busy = true; this.genMessage = "";
       try {
-        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/generate-slots");
+        const res = await this.withLossConfirm(confirmed => OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/generate-slots" + (confirmed ? "?confirm=true" : "")));
+        if (res === null) { this.genMessage = "Cancelled — nothing changed."; return; }
         await this.loadSlotCount();
         if (!res.created && !res.removed && !res.kept.length) {
           this.genMessage = "Slots already match the plan — nothing to change.";
