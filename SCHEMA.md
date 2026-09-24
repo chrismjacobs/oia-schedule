@@ -114,8 +114,9 @@ change never silently rewrites a month already in progress.
 | hour | int | one of the 8 slot hours |
 | state | enum | unavailable / unassigned / assigned |
 | student_id | fk → student null | set only when state=assigned |
+| track | enum | OW / SW — the worker lane this cell belongs to (see `slot`) |
 
-`(weekday, hour)` unique.
+`(weekday, hour, track)` unique.
 
 ### `regular_slot`
 One month's instance of the pattern, per `(date, hour)` — the grid the
@@ -131,15 +132,20 @@ hand edit), then hand-edited freely without touching the template.
 | hour | int | |
 | state | enum | unavailable / unassigned / assigned |
 | student_id | fk → student null | set only when state=assigned |
+| track | enum | OW / SW — the worker lane this cell belongs to (see `slot`) |
 
-`(date, hour)` unique. Drives `slot` generation directly (below) and feeds
+In the **SW lane no row at all** is the normal state: it means the office
+wants no service worker that hour. That is why a cell there can be deleted,
+which is not the same as marking it unavailable.
+
+`(date, hour, track)` unique. Drives `slot` generation directly (below) and feeds
 the solver's regular-lock pre-pass (SCHEMA §`assignment`, `slot.source`
 notes in `CLAUDE.md` §7 discussion).
 
 ---
 
 ## `slot`
-The atomic assignable unit: one date + one hour, one seat.
+The atomic assignable unit: one date + one hour + one lane, one seat.
 
 | field | type | notes |
 |---|---|---|
@@ -148,12 +154,36 @@ The atomic assignable unit: one date + one hour, one seat.
 | hour | int | 8,9,10,11,13,14,15,16 (start hour; 1-hour duration) |
 | period | enum | morning / afternoon (derived, for grouping) |
 | state | enum | open (unassigned) / assigned / reopened |
+| track | enum | OW (paid) / SW (unpaid — service workers and TAs) |
 
 Generated for the month from the calendar minus `closed_date`s **and** any
 `(date, hour)` whose `regular_slot` is `unavailable` — no slot at all is
 created for those (coverage need varies month to month, not every hour needs
 staffing). Cells with no `regular_slot` row fall back to plain generation
-exactly as before the feature existed. `(date, hour)` unique.
+exactly as before the feature existed. `(date, hour, track)` unique.
+
+### Worker lanes (`track`)
+
+Some hours are staffed by two people at once — one paid Official Worker and
+one unpaid Service Worker. They never collide (never two OW or two SW in one
+hour), so instead of giving a slot a capacity and letting two assignments
+share it, **each lane gets its own slot row.** The lanes are merged only when
+a grid is drawn.
+
+This is what keeps the rest of the model intact: `assignment` stays one
+student per slot, `slot.state` stays binary, and a half-staffed hour needs no
+special counting — the empty seat is its own uncovered slot.
+
+The two lanes have **opposite generation defaults** (`app/utils/tracks.py`):
+
+- **OW** — an hour is staffed unless the regular grid marks it unavailable.
+  Exactly the rule that existed before lanes.
+- **SW** — an hour is staffed *only* where a `regular_slot` row says so. "No
+  row means staff it" applied to a second lane would double every hour in the
+  month, so absence is meaningful here and deleting a cell is a real action.
+
+A student's lane is their `worker_type` (TA maps to SW), and it is strict:
+they only ever see, offer, and can be assigned their own lane's slots.
 
 ---
 
@@ -376,7 +406,7 @@ Every notification, gated for once-only delivery (idempotent `/tick`).
 | field | type | notes |
 |---|---|---|
 | id | pk | |
-| type | enum | selection_open / closing_warning / committed / leave_requested / slot_open / no_show |
+| type | enum | selection_open / closing_warning / committed / leave_requested / slot_open / no_show / month_report |
 | target | enum | group / individual / overseer |
 | related_type / related_id | text / int | e.g. slot, leave_request, month |
 | sent_at | ts | |
@@ -439,9 +469,10 @@ Fixed UI text, bilingual. Can be a static JSON file rather than a table.
 
 ## Notes for implementation
 
-- Enforce `student_id` as exactly 8 numeric digits at model and form layers.
 - One-student-per-slot is a DB uniqueness constraint, not just app logic — solver,
-  manual edits, and FCFS claims all funnel through `assignment`.
+  manual edits, and FCFS claims all funnel through `assignment`. It stays true with
+  worker lanes: an hour worked by two people is two `slot` rows, one per lane, not
+  one slot holding two students.
 - Store `solver_weights` per schedule so a committed schedule is reproducible.
 - Keep `timecard_upload` and the session report fully separate.
 - `period_key` on `task_completion` makes cadence guarding trivial: compute the key

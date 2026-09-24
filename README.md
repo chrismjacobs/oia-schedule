@@ -76,6 +76,54 @@ Setup) deletes only those rows, real data untouched.
 7. At month end, `POST /api/admin/months/<id>/close` (from `running`) produces
    the close-out report and locks the month.
 
+## Worker lanes (OW / SW)
+
+Some hours are staffed by two people at once: a paid Official Worker and an
+unpaid Service Worker (TAs count as SW). Rather than letting two students
+share one slot, **each lane gets its own `slot` row** for the same hour, and
+the grids merge them into one cell when they draw. Everything downstream stays
+as it was: one student per slot, `slot.state` binary, and a half-staffed hour
+is simply one covered slot plus one uncovered one.
+
+- A student's lane is their `worker_type`, strictly. They only see, offer and
+  can be assigned their own lane's hours, and the dashboard flags anyone whose
+  worker type is still unset (those default to the paid lane).
+- **Regular Schedule** has an OW/SW toggle driving both the master template and
+  the month grid. The paid lane behaves as it always did — every weekday hour
+  is staffed unless marked unavailable. The unpaid lane is the other way round:
+  an hour is staffed only where you say so, so most of its grid reads `none`,
+  and deleting a cell is a real action, distinct from "unavailable".
+- Adding the second lane needs one migration, run once per environment:
+  `venv/Scripts/python migrations/2026-09-24_slot_tracks.py`. It is additive and
+  backward compatible, so it can go in ahead of the deploy.
+
+## Month report
+
+The close-out report is derived, never stored, so the only ways a month's
+numbers leave the database are **Download CSV** (utf-8-sig, so Excel on Windows
+reads Chinese names correctly), the **print** view, and **Post to LINE**, which
+sends the per-student hours summary to the group once per month. All three are
+on Setup → Month report, for any month, not only at close.
+
+## Tests
+
+```bash
+cd backend && venv/Scripts/python -m pytest tests/ -v
+```
+
+`tests/conftest.py` forces `DATABASE_URL` to a throwaway SQLite file at import
+time and aborts the run if the suite ever resolves to anything else — `.env`
+points at the live Neon database, so this matters.
+
+`tools/availability_snapshot.py` answers "did we lose anyone's saved hours?"
+across a migration or deploy by diff rather than by eye:
+
+```bash
+venv/Scripts/python tools/availability_snapshot.py > before.json
+# ... migrate, deploy ...
+venv/Scripts/python tools/availability_snapshot.py --compare before.json
+```
+
 ## Config
 
 All the tunable values in `CLAUDE.md` §7/§18 are environment variables (see

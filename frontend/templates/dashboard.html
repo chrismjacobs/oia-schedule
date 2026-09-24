@@ -194,6 +194,17 @@
   <section class="pad" v-if="loading"><p class="hint">Loading…</p></section>
 
   <template v-if="data && !loading">
+    <!-- worker_type decides which lane a student works in, and an unset one
+         quietly falls back to the paid lane. Say so before the next month's
+         slots get built around that guess. -->
+    <div class="pad" v-if="data.unclassified_students && data.unclassified_students.length">
+      <div class="statusline is-shut">
+        <strong>[[ data.unclassified_students.length ]] student[[ data.unclassified_students.length === 1 ? '' : 's' ]] have no worker type set</strong>
+        <span class="hint">— [[ data.unclassified_students.map(s => s.english_name || s.chinese_name).join(", ") ]].
+          They are treated as paid workers (OW) until you set it. Students → Edit.</span>
+      </div>
+    </div>
+
     <div class="summary">
       <div class="stat">
         <div class="k">Coverage 覆蓋率</div>
