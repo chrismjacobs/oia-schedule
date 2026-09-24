@@ -15,7 +15,7 @@
           <strong class="mono">[[ sess.date ]] <span class="hint">[[ hoursLabel(sess.hours) ]]</span></strong>
           <span class="hint mono">[[ formatTime(sess.signed_in_at) ]] – [[ sess.signed_out_at ? formatTime(sess.signed_out_at) : 'still open' ]]</span>
         </div>
-        <span class="badge warn" v-if="sess.flagged">[[ sess.flag_reason ]]</span>
+        <span class="badge warn" v-if="sess.flagged">[[ $flagLabel(sess.flag_reason) ]]</span>
         <!-- One report per session (CLAUDE.md #9), not one per hour. -->
         <div style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
           <span v-if="sess.note">[[ sess.note ]]</span>

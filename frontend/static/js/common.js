@@ -135,6 +135,18 @@
     return narrow ? entry.short : entry.full;
   }
 
+  // An attendance session's flag, in words. The raw values are column
+  // shorthand; students and the overseer both see this badge, and
+  // "forgot_sign_out" reads as a database field rather than as news.
+  const FLAG_LABELS = {
+    forgot_sign_out: "no sign-out",
+    late_sign_out: "signed out late",
+    not_scheduled: "not scheduled",
+  };
+  function flagLabel(reason) {
+    return FLAG_LABELS[reason] || reason;
+  }
+
   // ---------------- colour x shape identity tokens ----------------
   function shapeSVG(color, shape) {
     const shapes = {
@@ -157,6 +169,7 @@
     });
     app.config.globalProperties.$bilingual = bilingual;
     app.config.globalProperties.$weekday = weekdayLabel;
+    app.config.globalProperties.$flagLabel = flagLabel;
   }
 
   // ---------------- header nav (hamburger drawer), plain JS ----------------
@@ -202,7 +215,7 @@
   document.addEventListener("DOMContentLoaded", initHeader);
 
   window.OIA = {
-    api, bilingual, shapeSVG, weekdayLabel, registerGlobals,
+    api, bilingual, shapeSVG, weekdayLabel, registerGlobals, flagLabel,
     groupIntoWeeks, monthWeeks, watchNarrow, shortName, hourLabel, stateLabel, mondayWeekday,
   };
 })();

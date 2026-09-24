@@ -12,6 +12,7 @@ from app.models import (
 from app.notifications.service import notify_signed_in, notify_signed_out
 from app.utils.decorators import login_required_api
 from app.utils.periods import period_key_for
+from app.utils.runs import contiguous_runs
 from app.utils.s3 import upload_object
 from app.utils.tz import local_now, local_today
 
@@ -52,13 +53,7 @@ def _runs(assignments):
     spans one run (CLAUDE.md #9) — 08:00-12:00 is one run, and a separate
     14:00-16:00 block is another, each with its own sign-in/out and report.
     The lunch break makes 11:00 and 13:00 non-contiguous on its own."""
-    runs = []
-    for a in sorted(assignments, key=lambda a: a.slot.hour):
-        if runs and a.slot.hour == runs[-1][-1].slot.hour + 1:
-            runs[-1].append(a)
-        else:
-            runs.append([a])
-    return runs
+    return contiguous_runs(assignments, lambda a: a.slot.hour)
 
 
 def _run_for_session(assignments, session):
@@ -79,6 +74,44 @@ def _run_for_session(assignments, session):
         if any(a.slot_id not in covered for a in run):
             return run
     return []
+
+
+def _open_sessions_before(student_id, on_date):
+    """Sessions left open on an earlier day — a forgotten sign-out. Until one
+    is closed it records nothing, so the whole run reads as a
+    scheduled-vs-recorded gap on the dashboard even though the student worked
+    it (CLAUDE.md #1). Surfaced to the student so they can close it late,
+    rather than the overseer's flag being the only thing that ever happens."""
+    return (
+        AttendanceSession.query.filter(
+            AttendanceSession.student_id == student_id,
+            AttendanceSession.signed_out_at.is_(None),
+            AttendanceSession.date < on_date,
+        )
+        .order_by(AttendanceSession.date)
+        .all()
+    )
+
+
+def _session_run_hours(session):
+    """The hours a still-open session would record, on its own day."""
+    assignments = _todays_assignments(session.student_id, session.date)
+    covered = _covered_slot_ids(session.student_id, session.date)
+    return [a.slot for a in _run_for_session(assignments, session)
+            if a.slot_id not in covered]
+
+
+def _default_late_signout(session):
+    """The end time a late sign-out is pre-filled with: the end of the run the
+    session covers. It is a suggestion the student can change, not a guess the
+    app makes for them — CLAUDE.md #9 forbids auto-closing at a guessed time,
+    and the difference is that a human confirms this one."""
+    hours = _session_run_hours(session)
+    if hours:
+        return _slot_start(hours[-1]) + timedelta(hours=1)
+    # Unscheduled session: nothing to derive an end from, so offer the hour
+    # after sign-in and let them correct it.
+    return session.signed_in_at + timedelta(hours=1)
 
 
 @bp.get("/today")
@@ -156,6 +189,15 @@ def today():
             dict(t.to_dict(), overdue=t.event_date < today_date) for t in due_tasks
         ],
         "availability_reminders": _availability_reminders(current_user.student_id),
+        # Forgotten sign-outs from earlier days, still closable (CLAUDE.md #9).
+        "stale_sessions": [
+            dict(
+                s.to_dict(),
+                hours=[slot.to_dict() for slot in _session_run_hours(s)],
+                default_signed_out_at=_default_late_signout(s).isoformat(),
+            )
+            for s in _open_sessions_before(current_user.student_id, today_date)
+        ],
     })
 
 
@@ -279,8 +321,19 @@ def sign_in():
 @login_required_api
 def available_tasks():
     """Regular tasks not yet done this period + open custom tasks — shown at
-    sign-out (CLAUDE.md #9)."""
+    sign-out (CLAUDE.md #9).
+
+    ?session_id= asks the question for that session's own day instead of
+    today: a late sign-out for last Tuesday must offer the tasks that were
+    still outstanding in Tuesday's cadence period, since that is the period
+    the completion will be filed against."""
     today_date = local_today()
+    session_id = request.args.get("session_id", type=int)
+    if session_id and current_user.student_id:
+        s = AttendanceSession.query.filter_by(
+            id=session_id, student_id=current_user.student_id).first()
+        if s:
+            today_date = s.date
     regular = RegularTask.query.filter_by(is_active=True).all()
     available_regular = []
     for t in regular:
@@ -294,6 +347,26 @@ def available_tasks():
         "regular_tasks": available_regular,
         "custom_tasks": [t.to_dict() for t in custom],
     })
+
+
+def _parse_late_signout(session, raw):
+    """The end time a student gives for a forgotten sign-out. Accepts "16:00"
+    or a full ISO timestamp; either way it is pinned to the session's own
+    date, so a late sign-out can never claim a shift that ran for three days.
+    Must be after sign-in and still inside that day. Returns None if it isn't
+    usable — the caller asks again rather than substituting a guess."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    try:
+        when = datetime.fromisoformat(text) if len(text) > 5 else datetime.combine(
+            session.date, datetime.strptime(text, "%H:%M").time())
+    except ValueError:
+        return None
+    when = datetime.combine(session.date, when.time())
+    if when <= session.signed_in_at:
+        return None
+    return when
 
 
 def _task_entry(item):
@@ -324,7 +397,14 @@ def sign_out():
     anywhere across the run (CLAUDE.md #9). The hours recorded are derived
     from the run the session signed in against — the student isn't asked to
     account for them one by one, since a task begun at 09:40 and finished at
-    10:10 belongs to neither hour on its own."""
+    10:10 belongs to neither hour on its own.
+
+    A session left open on an earlier day can still be closed here — that is
+    the late sign-out. It carries an explicit `signed_out_at` (the student
+    says when they actually left) and is flagged `late_sign_out` so the
+    overseer can see the report was written after the fact. The alternative
+    was what happened before: the run recorded nothing at all and read as a
+    full no-show on the dashboard."""
     if not current_user.student_id:
         return jsonify({"error": "students_only"}), 403
     data = request.get_json(force=True) or {}
@@ -342,6 +422,14 @@ def sign_out():
         return jsonify({"error": "no_open_session"}), 404
 
     now = local_now()
+    late = session.date < local_today()
+    if late:
+        now = _parse_late_signout(session, data.get("signed_out_at"))
+        if now is None:
+            return jsonify({
+                "error": "invalid_signed_out_at",
+                "message": "Give the time you actually left, on the day of the shift.",
+            }), 400
     skipped = []
 
     assignments = _todays_assignments(current_user.student_id, session.date)
@@ -385,6 +473,15 @@ def sign_out():
 
     session.note = note
     session.signed_out_at = now
+    if late:
+        # Keep the flag — the overseer should still see that this report was
+        # written days later, not while the student was in the office. It
+        # just stops meaning "nothing was ever recorded" (CLAUDE.md #9).
+        session.flagged = True
+        session.flag_reason = "late_sign_out"
+        current_app.logger.info(
+            "late sign-out | student=%s | session #%s (%s) closed at %s",
+            current_user.student_id, session.id, session.date, now)
     db.session.commit()
     notify_signed_out(session)
     result = session.to_dict()

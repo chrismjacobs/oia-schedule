@@ -10,7 +10,7 @@ from app.models import (
 )
 from app.utils.decorators import login_required_api, overseer_required
 from app.attendance.routes import _slot_start
-from app.notifications.service import notify_slot_open, notify_leave_requested
+from app.notifications.service import suppress_slot_open, notify_leave_requested
 from app.utils.tz import local_now
 
 
@@ -242,7 +242,9 @@ def decide_leave(leave_id):
     db.session.add(reopened)
     db.session.flush()
     db.session.commit()
-    notify_slot_open(reopened)
+    # Announcing is /tick's job (_announce_reopened_slots): approving a
+    # four-hour leave is four clicks here, and the group should hear one
+    # message about the whole run rather than one per hour.
     return jsonify(lr.to_dict())
 
 
@@ -343,8 +345,10 @@ def advertise_slot():
     db.session.add(reopened)
     db.session.flush()
     db.session.commit()
-    if announce:
-        notify_slot_open(reopened)
+    if not announce:
+        # Take the key so /tick's sweep doesn't announce what was opened
+        # quietly on purpose.
+        suppress_slot_open(reopened)
     return jsonify(dict(_open_slot_payload(reopened), announced=announce)), 201
 
 

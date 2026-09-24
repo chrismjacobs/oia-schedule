@@ -17,11 +17,13 @@ from flask import current_app
 from app.extensions import db
 from app.models import (
     Month, SelectionWindow, Slot, Assignment, Schedule, AttendanceSession, SessionHour, ReopenedSlot,
+    NotificationLog,
 )
 from app.notifications.service import (
-    notify_selection_open, notify_closing_warning, notify_no_show, notify_slot_open,
+    notify_selection_open, notify_closing_warning, notify_no_show_run, notify_slots_open,
     retry_failed,
 )
+from app.utils.runs import contiguous_runs
 from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.utils.tz import local_now
 
@@ -163,22 +165,37 @@ def _check_no_shows(now):
         "no-show scan | running months=%s | assignments in window %s..%s: %d",
         running_month_ids, lookback_date, now.date(), len(assignments))
 
-    checked = 0
+    # Grouped into runs before anything is judged: a missed four-hour morning
+    # is one no-show, not four (CLAUDE.md #9 — sign-in is once per run), and
+    # announcing it per hour is what emptied the LINE quota in September.
+    by_student_day = {}
     for a in assignments:
-        slot = a.slot
-        slot_start = datetime.combine(slot.date, datetime.min.time()).replace(hour=slot.hour)
-        if now < slot_start + grace:
-            continue
-        if _signed_in_for(a):
-            continue
-        # Named here as well as in the message, so a no-show for a student who
-        # shouldn't be on the roster any more is traceable to its assignment.
-        current_app.logger.info(
-            "no-show candidate | slot %s %s:00 (id=%s) | student=%s (id=%s) | assignment=%s",
-            slot.date, slot.hour, slot.id,
-            a.student.short_name if a.student else "MISSING", a.student_id, a.id)
-        notify_no_show(slot, a.student)
-        checked += 1
+        by_student_day.setdefault((a.student_id, a.slot.date), []).append(a)
+
+    checked = 0
+    for (_student_id, _day), group in by_student_day.items():
+        for run in contiguous_runs(group, lambda a: a.slot.hour):
+            first = run[0]
+            run_start = datetime.combine(
+                first.slot.date, datetime.min.time()).replace(hour=first.slot.hour)
+            if now < run_start + grace:
+                continue
+            # Any hour of the run signed in means they turned up — a late
+            # arrival covering 9:00-12:00 must not be announced as having
+            # missed the whole 8:00-12:00 shift. Lateness is the dashboard's
+            # to report, not the group's.
+            if any(_signed_in_for(a) for a in run):
+                continue
+            # Named here as well as in the message, so a no-show for a student
+            # who shouldn't be on the roster any more is traceable to its
+            # assignments.
+            current_app.logger.info(
+                "no-show candidate | %s %s:00-%s:00 | student=%s (id=%s) | assignments=%s",
+                first.slot.date, first.slot.hour, run[-1].slot.hour + 1,
+                first.student.short_name if first.student else "MISSING",
+                first.student_id, [a.id for a in run])
+            notify_no_show_run([a.slot for a in run], first.student)
+            checked += 1
     return {"no_show_checked": checked}
 
 
@@ -189,7 +206,11 @@ def _flag_forgotten_signouts(now):
     open_sessions = AttendanceSession.query.filter(
         AttendanceSession.signed_out_at.is_(None),
         AttendanceSession.signed_in_at <= cutoff,
-        AttendanceSession.flag_reason != "forgot_sign_out",
+        # NULL-safe: a plain session has flag_reason NULL, and in SQL
+        # `NULL != 'forgot_sign_out'` is NULL, not true — written without
+        # is_distinct_from this filter silently excluded every session that
+        # had never been flagged, i.e. exactly the ones to flag.
+        AttendanceSession.flag_reason.is_distinct_from("forgot_sign_out"),
     ).all()
     for s in open_sessions:
         s.flagged = True
@@ -235,11 +256,54 @@ def _auto_advertise_unfilled_slots(now):
         reopened = ReopenedSlot(slot_id=slot.id, source="auto_unfilled", opened_at=now)
         db.session.add(reopened)
         db.session.flush()
-        notify_slot_open(reopened)
         advertised += 1
     if advertised:
         db.session.commit()
     return {"auto_advertised": advertised}
+
+
+def _announce_reopened_slots(now):
+    """Announce newly opened hours, grouped into runs.
+
+    Every reopen path — approved leave, a manual Advertise, the auto_unfilled
+    sweep above — now creates its ReopenedSlot and leaves the announcing to
+    this one stage, so all three "fire the same way" (CLAUDE.md #12) and a
+    batch that arrives an hour at a time still goes out as a single message.
+    An overseer approving a student's four-hour leave clicks four times; the
+    group hears about it once.
+
+    What this costs is up to one cron interval before an open shift is
+    announced. FCFS can afford minutes, and it arguably improves it: the news
+    stops going out to whoever happens to be looking at that exact second.
+    """
+    pending_rows = (
+        ReopenedSlot.query.join(Slot, ReopenedSlot.slot_id == Slot.id)
+        .filter(
+            ReopenedSlot.claimed_by.is_(None),
+            ReopenedSlot.retracted_at.is_(None),
+            # Nobody can claim yesterday. An un-announced row for a past date
+            # is stale, not news, and announcing it would waste a push.
+            Slot.date >= now.date(),
+        ).all()
+    )
+    if not pending_rows:
+        return {"slot_open_announced": 0}
+
+    # The notification_log row IS the announced-flag — including the covered
+    # rows notify_slots_open writes for the tail of each run, which is what
+    # stops the rest of a run being announced again one hour at a time.
+    already_announced = {
+        row.related_id for row in NotificationLog.query.filter_by(
+            type="slot_open", related_type="reopened_slot").all()
+    }
+    pending = [r for r in pending_rows if r.id not in already_announced]
+    if not pending:
+        return {"slot_open_announced": 0}
+
+    current_app.logger.info(
+        "slot_open sweep | %d un-announced open slot(s): %s",
+        len(pending), [r.id for r in pending])
+    return {"slot_open_announced": notify_slots_open(pending)}
 
 
 def run_tick():
@@ -266,6 +330,9 @@ def run_tick():
         ("no_shows", _check_no_shows),
         ("forgot_signouts", _flag_forgotten_signouts),
         ("advertise", _auto_advertise_unfilled_slots),
+        # After advertise, so slots opened a moment ago by this same tick are
+        # announced in the same run as ones opened by leave or by hand.
+        ("announce_open", _announce_reopened_slots),
         # Last: anything the stages above failed to send gets another go,
         # including failures from previous ticks.
         ("notify_retry", lambda _now: retry_failed()),

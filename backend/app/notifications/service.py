@@ -6,6 +6,7 @@ from flask import current_app
 from app.extensions import db
 from app.models import NotificationLog
 from app.notifications.backends import get_backend
+from app.utils.runs import contiguous_runs, span_text
 from app.utils.settings import get_attendance_notify_enabled
 from app.utils.tz import local_now
 
@@ -87,6 +88,53 @@ def retry_failed(limit=25):
     return {"notify_retried": retried, "notify_retry_sent": sent, "notify_dropped": dropped}
 
 
+def _mark_covered(type_, target, related_type, related_ids, covered_by, message):
+    """Record the other members of a run as already accounted for.
+
+    One message covers a whole run and is keyed on the run's first member.
+    Without a row for the rest, the next /tick would look at each of them in
+    turn, find no notification against it, and re-announce the same news hour
+    by hour — which is the per-hour flood this exists to stop.
+
+    Written sent_flag=True so notify_once skips them and retry_failed leaves
+    them alone, and named as covered in the text so the log still shows which
+    message spoke for them. Nothing is ever pushed for these rows.
+    """
+    for related_id in related_ids:
+        _record_silent(type_, target, related_type, related_id,
+                       f"[covered by {related_type}:{covered_by}] {message}")
+    db.session.commit()
+
+
+def _record_silent(type_, target, related_type, related_id, message):
+    """Write a notification_log row that stands for a message nobody will be
+    sent — already spoken for by another, or deliberately withheld. Nothing
+    is pushed; the row exists so the key is taken."""
+    existing = NotificationLog.query.filter_by(
+        type=type_, target=target, related_type=related_type, related_id=related_id
+    ).first()
+    if existing:
+        return False
+    db.session.add(NotificationLog(
+        type=type_, target=target, related_type=related_type, related_id=related_id,
+        sent_flag=True, sent_at=local_now(), message=message,
+    ))
+    return True
+
+
+def suppress_slot_open(reopened_slot):
+    """Open a slot without announcing it (advertise announce=false).
+
+    The tick's sweep reads "no slot_open row" as "not announced yet", so a
+    deliberately quiet reopen has to leave one behind — or the next tick
+    would helpfully broadcast the very thing the overseer chose not to."""
+    written = _record_silent(
+        "slot_open", "group", "reopened_slot", reopened_slot.id,
+        "[not announced: opened quietly by the overseer]")
+    db.session.commit()
+    return written
+
+
 def reset_notification(type_, target, related_type, related_id):
     """Forget that a notification was sent, so it can fire again.
 
@@ -144,12 +192,37 @@ def notify_leave_requested(leave_requests):
     )
 
 
-def notify_slot_open(reopened_slot):
-    slot = reopened_slot.slot
-    return notify_once(
-        "slot_open", "group", "reopened_slot", reopened_slot.id,
-        f"[OIA] A slot opened up: {slot.date.isoformat()} {slot.hour}:00. First come, first served.",
-    )
+def notify_slots_open(reopened_slots):
+    """One message per contiguous run of newly opened hours.
+
+    Advertising an uncovered morning used to be four separate pushes, one per
+    hour, because a ReopenedSlot is per-hour and every one of them announced
+    itself. A group push costs one message per member of the group, so a
+    four-hour morning to eleven students was 44 of a 200/month quota — the
+    single thing that exhausted it in September.
+
+    Keyed on the run's first ReopenedSlot; the rest are marked covered so a
+    later sweep doesn't announce them again individually.
+    """
+    rows = [r for r in reopened_slots if r is not None and r.slot is not None]
+    if not rows:
+        return 0
+
+    by_day = {}
+    for r in rows:
+        by_day.setdefault(r.slot.date, []).append(r)
+
+    sent = 0
+    for _day, day_rows in sorted(by_day.items()):
+        for run in contiguous_runs(day_rows, lambda r: r.slot.hour):
+            first = run[0]
+            message = (f"[OIA] A slot opened up: {span_text([r.slot for r in run])}. "
+                       f"First come, first served.")
+            if notify_once("slot_open", "group", "reopened_slot", first.id, message):
+                sent += 1
+            _mark_covered("slot_open", "group", "reopened_slot",
+                          [r.id for r in run[1:]], first.id, message)
+    return sent
 
 
 def notify_selection_open(month):
@@ -188,15 +261,36 @@ def notify_signed_out(session):
             "notify OFF (Advanced > sign-in/out notifications is unticked) | "
             "signed_out attendance_session:%s", session.id)
         return False
+    # A late sign-out lands days after the shift; announcing it as a plain
+    # "signed out" reads as if they were still in the office just now.
+    if session.flag_reason == "late_sign_out":
+        text = (f"[OIA] {session.student.short_name} signed out late for "
+                f"{session.date.isoformat()}.")
+    else:
+        text = f"[OIA] {session.student.short_name} signed out."
     return notify_once(
-        "signed_out", "group", "attendance_session", session.id,
-        f"[OIA] {session.student.short_name} signed out.",
+        "signed_out", "group", "attendance_session", session.id, text,
     )
 
 
-def notify_no_show(slot, student):
-    return notify_once(
-        "no_show", "group", "slot", slot.id,
-        f"[OIA] Reminder: {student.short_name} was scheduled {slot.date.isoformat()} "
-        f"{slot.hour}:00 and hasn't signed in yet.",
-    )
+def notify_no_show_run(slots, student):
+    """One reminder per missed run, not per missed hour.
+
+    A student who misses a four-hour morning has had one no-show, and the
+    group hearing about it four times is both noise and four times the quota
+    (see notify_slots_open). The run is also the honest unit: sign-in is once
+    per run (CLAUDE.md #9), so "hasn't signed in" is a fact about the run.
+
+    Keyed on the run's first slot, with the rest marked covered — otherwise
+    every later /tick would re-check the untouched hours and announce them.
+    """
+    ordered = sorted(slots, key=lambda s: s.hour)
+    if not ordered:
+        return False
+    first = ordered[0]
+    message = (f"[OIA] Reminder: {student.short_name} was scheduled "
+               f"{span_text(ordered)} and hasn't signed in yet.")
+    sent = notify_once("no_show", "group", "slot", first.id, message)
+    _mark_covered("no_show", "group", "slot",
+                  [s.id for s in ordered[1:]], first.id, message)
+    return sent

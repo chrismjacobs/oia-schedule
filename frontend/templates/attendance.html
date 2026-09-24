@@ -30,7 +30,57 @@
 
     <p v-if="loading" class="hint">Loading…</p>
 
-    <template v-else-if="today">
+    <!-- Forgot to sign out on an earlier day. Until this is closed the whole
+         run records nothing and reads as a no-show on the dashboard, so it
+         sits above everything else until it's dealt with. -->
+    <div class="panel" v-for="st in staleSessions" v-bind:key="'stale-' + st.id"
+         style="border-left:4px solid var(--warn); background:var(--warn-bg);">
+      <h3 style="color:var(--warn);">You didn't sign out on [[ st.date ]] 忘記簽退</h3>
+      <p style="margin:4px 0 10px;">
+        Signed in at <strong class="mono">[[ formatTime(st.signed_in_at) ]]</strong>, never signed out.
+        <span v-if="st.hours.length">That shift was <strong class="mono">[[ hoursLabel(st.hours) ]]</strong>.</span>
+        Close it now and it records properly — leave it and those hours count as a no-show.
+      </p>
+
+      <div class="field">
+        <label>What time did you actually leave? 實際離開時間</label>
+        <input type="time" class="mono" v-model="lateForm[st.id].signed_out_at" step="300">
+        <div class="hint">On [[ st.date ]]. Pre-filled with the end of your shift — change it if you left earlier or later.</div>
+      </div>
+
+      <div class="field">
+        <label>What you did that session 當班工作紀錄</label>
+        <textarea rows="3" v-model="lateForm[st.id].note" placeholder="One write-up for the whole shift — any language."></textarea>
+      </div>
+
+      <div v-if="lateTasks[st.id] && lateTasks[st.id].regular_tasks.length">
+        <label>Regular tasks done that day 當天完成的例行任務</label>
+        <div v-for="rt in lateTasks[st.id].regular_tasks" v-bind:key="'lr-' + rt.id" style="margin-bottom:6px;">
+          <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+            <input type="checkbox" v-model="lateForm[st.id].regular[rt.id]" style="width:auto;">
+            [[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span>
+            <span class="badge warn" v-if="rt.photo_required">photo required</span>
+          </label>
+        </div>
+      </div>
+
+      <div v-if="lateTasks[st.id] && lateTasks[st.id].custom_tasks.length">
+        <label>Custom tasks done that day 當天完成的自訂任務</label>
+        <div v-for="ct in lateTasks[st.id].custom_tasks" v-bind:key="'lc-' + ct.id" style="margin-bottom:6px;">
+          <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; text-transform:none;">
+            <input type="checkbox" v-model="lateForm[st.id].custom[ct.id]" style="width:auto;">
+            [[ ct.title_zh ]] <span v-if="ct.title_en">/ [[ ct.title_en ]]</span>
+            <span class="badge warn" v-if="ct.photo_required">photo required</span>
+          </label>
+        </div>
+      </div>
+
+      <button v-bind:disabled="busy" v-on:click="lateSignOut(st)" style="margin-top:12px;">Sign out for [[ st.date ]] 補簽退</button>
+      <p class="hint">A late sign-out is marked as such for the overseer — it's a correction, not the same as
+        signing out on the day. Photo proof can't be attached after the fact; tick the tasks and say so in the note.</p>
+    </div>
+
+    <template v-if="!loading && today">
       <div class="panel" v-if="!today.scheduled_slots.length">No shifts scheduled today. 今天沒有排班</div>
 
       <div class="panel" v-if="today.earlier_sessions.length">
@@ -123,7 +173,7 @@
           <strong class="mono">[[ sess.date ]] <span class="hint">[[ hoursLabel(sess.hours) ]]</span></strong>
           <span class="hint mono">[[ formatTime(sess.signed_in_at) ]] – [[ sess.signed_out_at ? formatTime(sess.signed_out_at) : 'still open' ]]</span>
         </div>
-        <span class="badge warn" v-if="sess.flagged">[[ sess.flag_reason ]]</span>
+        <span class="badge warn" v-if="sess.flagged">[[ $flagLabel(sess.flag_reason) ]]</span>
         <div style="margin-top:6px; padding-left:10px; border-left:2px solid var(--rule-2);">
           <span v-if="sess.note">[[ sess.note ]]</span>
           <span class="hint" v-else>No write-up.</span>
@@ -143,12 +193,21 @@ const app = createApp({
     return {
       today: null, tasks: { regular_tasks: [], custom_tasks: [] },
       report: { note: "", regular: {}, custom: {} }, proofFiles: {},
+      // One form + one task list per forgotten sign-out being closed.
+      lateForm: {}, lateTasks: {},
       history: [], loading: true, busy: false, message: "",
     };
   },
   computed: {
     uncoveredSlots() {
       return this.today ? this.today.scheduled_slots.filter(s => !s.covered) : [];
+    },
+    // Only once its form exists — `today` is assigned before loadStale()
+    // finishes, and rendering in that gap would read lateForm[id].note off
+    // undefined.
+    staleSessions() {
+      if (!this.today) return [];
+      return (this.today.stale_sessions || []).filter(st => this.lateForm[st.id]);
     },
     canSignIn() {
       if (!this.today) return false;
@@ -168,8 +227,50 @@ const app = createApp({
         if (this.today.open_session) {
           this.tasks = await OIA.api.get("/api/attendance/tasks");
         }
+        await this.loadStale();
       } finally {
         this.loading = false;
+      }
+    },
+    // Each forgotten sign-out gets its own pre-filled end time and its own
+    // task list, asked for that day's cadence period rather than today's.
+    async loadStale() {
+      const forms = {}, taskLists = {};
+      for (const st of this.today.stale_sessions || []) {
+        forms[st.id] = {
+          signed_out_at: this.formatTime(st.default_signed_out_at),
+          note: "", regular: {}, custom: {},
+        };
+        taskLists[st.id] = await OIA.api.get(
+          "/api/attendance/tasks?session_id=" + st.id);
+      }
+      this.lateForm = forms;
+      this.lateTasks = taskLists;
+    },
+    async lateSignOut(st) {
+      const form = this.lateForm[st.id];
+      if (!form.signed_out_at) { this.message = "Give the time you left."; return; }
+      this.busy = true; this.message = "";
+      try {
+        const pick = (bag) => Object.entries(bag)
+          .filter(([, checked]) => checked).map(([id]) => Number(id));
+        const res = await OIA.api.post("/api/attendance/sign-out", {
+          session_id: st.id,
+          signed_out_at: form.signed_out_at,
+          note: form.note,
+          regular_task_ids: pick(form.regular),
+          custom_task_ids: pick(form.custom),
+        });
+        this.message = "Signed out for " + st.date + "."
+          + (res.skipped && res.skipped.length
+             ? " Some tasks need a photo to count as done, which a late sign-out can't attach — tell the overseer."
+             : "");
+        await this.load();
+        this.history = await OIA.api.get("/api/attendance/history");
+      } catch (e) {
+        this.message = e.message;
+      } finally {
+        this.busy = false;
       }
     },
     hoursLabel(hours) {
