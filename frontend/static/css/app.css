@@ -312,16 +312,38 @@ td.reg-cell select:focus-visible { outline: 2px solid var(--accent); outline-off
 td.reg-cell { position: relative; }
 .sched-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
 .sched-name { font-size: 10px; color: var(--ink-2); line-height: 1.15; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-td.reg-cell.sched-flagged { background: var(--warn-bg); }
-td.reg-cell.sched-recorded { background: #E7F0EB; }
-td.reg-cell.sched-advertised { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--warn-bg) 5px, var(--warn-bg) 10px); }
+
+/* Worker lanes sharing one cell. An hour staffed by both a paid and an
+   unpaid worker is two slots, so it draws two halves; a single-lane hour is
+   one .lane filling the cell, which looks exactly as it did before lanes
+   existed. Side by side rather than stacked, so the row height never grows
+   and the grid still fits a phone without scrolling sideways. */
+.lanes { display: flex; height: 100%; width: 100%; }
+.lane { position: relative; flex: 1 1 0; min-width: 0; height: 100%;
+        display: flex; align-items: center; justify-content: center; }
+/* The unpaid lane is marked by a rule down its leading edge and nothing
+   else. Colour and shape are the student's identity (CLAUDE.md #15) and
+   can't be borrowed to mean something about the lane. */
+.lane.lane-alt { border-left: 2px solid var(--rule); }
+/* Two tokens and two names in the width of one cell — shrink to suit. */
+.lane:not(:only-child) .tok.sm,
+.lane:not(:only-child) .tok.sm svg { width: 15px; height: 15px; }
+.lane:not(:only-child) .sched-name { font-size: 9px; letter-spacing: -.01em; }
+.lane:not(:only-child) .adv-cell .hint { font-size: 9px; }
+/* The draft grid puts a select in each lane; it has to fill its half. */
+.lane > select { width: 100%; }
+.lane:not(:only-child) > select { font-size: 9.5px; padding: 0 1px; }
+
+.reg-cell.sched-flagged, .lane.sched-flagged { background: var(--warn-bg); }
+.reg-cell.sched-recorded, .lane.sched-recorded { background: #E7F0EB; }
+.reg-cell.sched-advertised, .lane.sched-advertised { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--warn-bg) 5px, var(--warn-bg) 10px); }
 /* Uncovered = the mockup's muted grey + hatch. An hour with no Slot behind it
    at all (unavailable — never meant to be staffed this month) is a solid
    darker grey, so the two never read alike — but it still offers the
    advertise icon, since the need can change. */
-td.reg-cell.sched-uncovered { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
-td.reg-cell.sched-noslot { background: var(--unavail-bg); }
-td.reg-cell.sched-noslot .adv-btn { color: var(--ink-2); }
+.reg-cell.sched-uncovered, .lane.sched-uncovered { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--open-bg) 5px, var(--open-bg) 10px); }
+.reg-cell.sched-noslot, .lane.sched-noslot { background: var(--unavail-bg); }
+.reg-cell.sched-noslot .adv-btn, .lane.sched-noslot .adv-btn { color: var(--ink-2); }
 
 /* Greyed days. Days spilling into the neighbouring month (so every week is a
    full Mon–Fri) and closed days are blank; past days keep their content but
@@ -341,7 +363,7 @@ td.reg-cell.day-past::after {
 
 /* Leave requested, not yet approved — an amber ring plus a corner dot, both
    status colours, kept clear of the student palette. */
-td.reg-cell.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
+td.reg-cell.sched-leave-pending, .lane.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
 .leave-pin { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 
 /* Muted in-cell icon actions (advertise / retract) — deliberately quiet:
@@ -372,11 +394,16 @@ td.reg-cell.sched-leave-pending { box-shadow: inset 0 0 0 2px var(--warn); }
    every student, since on this page the reader already knows who they are, so a
    fixed high-contrast green reads identically for everyone. Everyone else is
    flattened to grey, open cells stay red. ---------- */
-td.reg-cell.sched-mine { background: var(--mine); }
-td.reg-cell.sched-mine .sched-name-only { color: var(--mine-ink); font-weight: 700; }
-td.reg-cell.sched-other { background: var(--open-bg); }
-td.reg-cell.sched-other .sched-name-only { color: var(--ink-3); }
-td.reg-cell.sched-open { background: #DC2626; }
+td.reg-cell.sched-mine, .lane.sched-mine { background: var(--mine); }
+td.reg-cell.sched-mine .sched-name-only,
+.lane.sched-mine .sched-name-only { color: var(--mine-ink); font-weight: 700; }
+td.reg-cell.sched-other, .lane.sched-other { background: var(--open-bg); }
+td.reg-cell.sched-other .sched-name-only,
+.lane.sched-other .sched-name-only { color: var(--ink-3); }
+td.reg-cell.sched-open, .lane.sched-open { background: #DC2626; }
+/* Two names in the width of one cell. */
+.lane:not(:only-child) .sched-name-only,
+.lane:not(:only-child) .open-label { font-size: 10px; }
 .open-label { font-size: 12px; font-weight: 700; color: #fff; }
 
 /* ---------- Roster / legend ---------- */

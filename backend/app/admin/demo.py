@@ -5,11 +5,12 @@ app so the grid renders like `roster-mockup.html` on first load. Every row is
 tagged `is_demo` (student, schedule) so "Reset demo data" can remove exactly
 this and nothing else — real students and schedules are never touched.
 
-6 students, matching the real roster's actual scale (under 10) rather than
-the mockup's illustrative 9 — small enough that no colour ever needs to
-repeat (8-colour palette, exhausted only past 8 students; see identity.py).
-The weekly template below is a hand-built 6-person analogue of the mockup's
-own wkData, preserving its shape: everyone gets a plausible spread of hours,
+8 students, matching the real roster's actual scale (under 10) rather than
+the mockup's illustrative 9 — exactly exhausting the 8-colour palette, so no
+colour ever needs to repeat (see identity.py). Six work the paid lane and two
+the unpaid one, so the seeded month shows an hour with two workers on it.
+The weekly template below is a hand-built analogue of the mockup's own
+wkData, preserving its shape: everyone gets a plausible spread of hours,
 a couple of cells stay open (hatched), and the Monday "showcase day" tells
 the same story as the mockup's day view (a no-show, an open slot).
 """
@@ -20,22 +21,34 @@ from app.extensions import db
 from app.utils.tz import local_now, local_today
 from app.models import (
     Semester, Student, Month, Slot, Availability, Schedule, Assignment,
-    AttendanceSession, SessionHour, SLOT_HOURS,
+    AttendanceSession, SessionHour, RegularSlot, SLOT_HOURS,
 )
 from app.schedule.solver import solve_month
 from app.utils.settings import get_solver_weights, get_floor_hours
 
 DEMO_SEMESTER_NAME = "Demo"
 
-# (english_name, chinese_name, colour, shape, student_id)
+# (english_name, chinese_name, colour, shape, student_id, worker_type)
+# The last two work the unpaid lane — one SW, one TA — so the seeded month
+# shows what two workers in one hour actually looks like. TA sits in the same
+# lane as SW (app/utils/tracks.py).
 DEMO_STUDENTS = [
-    ("Wei-Chen", "陳威辰", "#0072B2", "circle",   "90000001"),
-    ("Sandy",    "林思妤", "#E69F00", "triangle", "90000002"),
-    ("Kevin",    "黃冠宇", "#009E73", "square",   "90000003"),
-    ("Amy",      "張書瑋", "#D55E00", "diamond",  "90000004"),
-    ("Grace",    "李佳穎", "#7E57C2", "circle",   "90000005"),
-    ("Ethan",    "吳承恩", "#0EA5A5", "triangle", "90000006"),
+    ("Wei-Chen", "陳威辰", "#0072B2", "circle",   "90000001", "OW"),
+    ("Sandy",    "林思妤", "#E69F00", "triangle", "90000002", "OW"),
+    ("Kevin",    "黃冠宇", "#009E73", "square",   "90000003", "OW"),
+    ("Amy",      "張書瑋", "#D55E00", "diamond",  "90000004", "OW"),
+    ("Grace",    "李佳穎", "#7E57C2", "circle",   "90000005", "OW"),
+    ("Ethan",    "吳承恩", "#0EA5A5", "triangle", "90000006", "OW"),
+    ("Mei",      "周美玲", "#C2185B", "square",   "90000007", "SW"),
+    ("Hao",      "劉浩然", "#8D6E63", "diamond",  "90000008", "TA"),
 ]
+
+# The unpaid lane, mirroring the real office: a service worker on the delivery
+# days, on the same hours the paid lane already covers. {weekday: {hour: idx}}
+SW_WEEK_TEMPLATE = {
+    1: {10: 6, 11: 6, 13: 7, 14: 7},   # Tuesday
+    3: {10: 7, 11: 7, 13: 6, 14: 6},   # Thursday
+}
 
 # Weekly template: [hour_index][weekday Mon-Fri] -> student index into DEMO_STUDENTS, or None (open).
 WEEK_TEMPLATE = [
@@ -126,10 +139,11 @@ def seed_demo():
         db.session.flush()
 
     students = []
-    for english, chinese, colour, shape, student_id in DEMO_STUDENTS:
+    for english, chinese, colour, shape, student_id, worker_type in DEMO_STUDENTS:
         s = Student(
             semester_id=semester.id, chinese_name=chinese, english_name=english,
             student_id=student_id, colour=colour, shape=shape, is_demo=True,
+            worker_type=worker_type,
         )
         db.session.add(s)
         students.append(s)
@@ -142,12 +156,25 @@ def seed_demo():
     db.session.flush()
 
     slots_by_date_hour = {}
+    sw_slots = {}
     for d in _weekdays_in_month(year, month_num):
+        sw_hours = SW_WEEK_TEMPLATE.get(d.weekday(), {})
         for hour in SLOT_HOURS:
             period = "morning" if hour < 12 else "afternoon"
-            slot = Slot(month_id=month.id, date=d, hour=hour, period=period, state="open")
+            slot = Slot(month_id=month.id, date=d, hour=hour, period=period,
+                        state="open", track="OW")
             db.session.add(slot)
             slots_by_date_hour[(d, hour)] = slot
+            if hour in sw_hours:
+                # The unpaid lane is opt-in, so it gets both a slot and the
+                # regular_slot row that declares the office wants one here —
+                # otherwise the next sync would take the slot straight back out.
+                sw = Slot(month_id=month.id, date=d, hour=hour, period=period,
+                          state="open", track="SW")
+                db.session.add(sw)
+                db.session.add(RegularSlot(month_id=month.id, date=d, hour=hour,
+                                           state="unassigned", track="SW"))
+                sw_slots[(d, hour)] = (sw, sw_hours[hour])
     db.session.flush()
 
     now = local_now()
@@ -156,6 +183,9 @@ def seed_demo():
         student_idx = WEEK_TEMPLATE[hour_idx][d.weekday()]
         if student_idx is not None:
             db.session.add(Availability(student_id=students[student_idx].id, slot_id=slot.id, submitted_at=now))
+    for (sw_slot, student_idx) in sw_slots.values():
+        db.session.add(Availability(student_id=students[student_idx].id,
+                                    slot_id=sw_slot.id, submitted_at=now))
     db.session.commit()
 
     weights = get_solver_weights()

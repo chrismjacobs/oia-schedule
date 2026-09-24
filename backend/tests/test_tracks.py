@@ -280,3 +280,55 @@ def test_unfilled_sw_hour_counts_as_uncovered(app):
     uncovered = {s["id"] for s in report["uncovered_slots"]}
     assert sw_slot.id in uncovered, "the unstaffed unpaid seat is visibly uncovered"
     assert ow_slot.id not in uncovered
+
+
+def test_dashboard_names_unclassified_students(app):
+    """worker_type decides the lane, so an unset one must be visible rather
+    than quietly resolving to the paid lane."""
+    from app.dashboard.routes import build_month_dashboard
+
+    month = make_month()
+    make_student(1, "OW")
+    nobody_knows = make_student(2, None)
+    db.session.commit()
+
+    flagged = build_month_dashboard(month)["unclassified_students"]
+    assert [s["id"] for s in flagged] == [nobody_knows.id]
+
+
+# ----------------------------------------------------------- lane strictness
+
+def test_cross_lane_assignment_is_refused(app):
+    """A paid worker cannot be put on an unpaid hour, even by hand. Without
+    this the refusal would come from the availability check instead, which
+    reads as a scheduling problem rather than a worker-type one."""
+    month = make_month()
+    d = date(2026, 10, 5)
+    db.session.add(RegularSlot(month_id=month.id, date=d, hour=13,
+                               state="unassigned", track="SW"))
+    db.session.flush()
+    sync_month_slots(month)
+
+    ow = make_student(1, "OW")
+    sw_slot = Slot.query.filter_by(month_id=month.id, date=d, hour=13, track="SW").one()
+    # Give them availability on it, so only the lane check can refuse.
+    db.session.add(Availability(student_id=ow.id, slot_id=sw_slot.id))
+    schedule = Schedule(month_id=month.id, status="draft")
+    db.session.add(schedule)
+    db.session.commit()
+
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = "1"
+        sess["_fresh"] = True
+    from app.models import User
+    admin = User(username="boss", role="overseer")
+    admin.set_password("x")
+    db.session.add(admin)
+    db.session.commit()
+
+    res = client.post(f"/api/schedule/months/{month.id}/assignments",
+                      json={"slot_id": sw_slot.id, "student_id": ow.id})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "wrong_track"
+    assert Assignment.query.count() == 0

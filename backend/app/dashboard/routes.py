@@ -134,9 +134,18 @@ def build_month_dashboard(month):
     for ct in CustomTask.query.all():
         custom_task_counts[ct.status] += 1
 
+    # worker_type decides which lane a student works in, and an unset one
+    # falls back to the paid lane. That fallback exists so nothing breaks, not
+    # so anybody ends up staffed by it — name whoever is still unclassified
+    # before the next month's slots get built around the assumption.
+    unclassified = sorted(
+        (s.to_dict() for s in students.values() if not s.worker_type and not s.is_demo),
+        key=lambda s: (s["english_name"] or "").lower())
+
     return {
         "month": month.to_dict(),
         "schedule": schedule.to_dict() if schedule else None,
+        "unclassified_students": unclassified,
         "gap": gap_rows,
         "no_shows": no_shows,
         "signed_in_not_scheduled": signed_in_not_scheduled,

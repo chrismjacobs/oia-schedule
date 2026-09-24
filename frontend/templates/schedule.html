@@ -29,12 +29,19 @@
           <tbody>
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ hourLabel(h) ]]</td>
-              <td v-for="d in week" v-bind:key="d+'_'+h"
-                  class="reg-cell" v-bind:class="cellClass(d, h)"
-                  v-bind:title="isOpenShift(d, h) ? 'Open shift — tap to claim it on Open Shifts' : null"
-                  v-bind:style="isOpenShift(d, h) ? 'cursor:pointer;' : null" v-on:click="onCellClick(d, h)">
-                <span class="sched-name-only" v-if="row(d,h) && row(d,h).assignment">[[ studentLabel(students[row(d,h).assignment.student_id]) ]]</span>
-                <span class="open-label" v-else-if="isOpenShift(d, h)">Open</span>
+              <!-- One sub-cell per lane, so an hour worked by two people
+                   shows both and each student can find their own shift. -->
+              <td v-for="d in week" v-bind:key="d+'_'+h" class="reg-cell">
+                <span class="lanes">
+                  <span v-for="r in laneRows(d, h)" v-bind:key="laneKey(d, h, r)"
+                        class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
+                        v-bind:title="isOpenShift(r) ? 'Open shift — tap to claim it on Open Shifts' : null"
+                        v-bind:style="isOpenShift(r) ? 'cursor:pointer;' : null"
+                        v-on:click="onCellClick(r)">
+                    <span class="sched-name-only" v-if="r && r.assignment">[[ studentLabel(students[r.assignment.student_id]) ]]</span>
+                    <span class="open-label" v-else-if="isOpenShift(r)">Open</span>
+                  </span>
+                </span>
               </td>
             </tr>
           </tbody>
@@ -59,8 +66,16 @@ const app = createApp({
   computed: {
     students() { return this.payload ? this.payload.students : {}; },
     rowsByKey() {
+      // A list per hour: an hour can be staffed in both lanes, and keeping
+      // one row per (date, hour) would let the unpaid lane replace the paid
+      // one — so a service worker could open this page and not find their
+      // own shift on it.
       const map = {};
-      if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
+      if (this.payload) this.payload.slots.forEach(r => {
+        (map[r.slot.date + "_" + r.slot.hour] ||= []).push(r);
+      });
+      Object.values(map).forEach(rows => rows.sort(
+        (a, b) => OIA.byLane(a.slot.track, b.slot.track)));
       return map;
     },
     weeks() {
@@ -85,7 +100,12 @@ const app = createApp({
     }
   },
   methods: {
-    row(date, hour) { return this.rowsByKey[date + "_" + hour]; },
+    laneRows(date, hour) {
+      const rows = this.rowsByKey[date + "_" + hour];
+      return rows && rows.length ? rows : [null];
+    },
+    laneKey(date, hour, r) { return date + "_" + hour + "_" + (r ? r.slot.track : "OW"); },
+    laneMark(r) { return r && r.slot.track !== "OW" ? "lane-alt" : null; },
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
     studentLabel(s) {
@@ -94,19 +114,17 @@ const app = createApp({
       return this.narrow ? OIA.shortName(name) : name;
     },
     // Claimable right now — the same test as the Open Shifts list.
-    isOpenShift(d, h) {
-      const r = this.row(d, h);
+    isOpenShift(r) {
       return !!(r && !r.assignment && r.open_shift);
     },
-    cellClass(d, h) {
-      const r = this.row(d, h);
+    cellClass(r) {
       if (!r) return {};
       if (!r.assignment) return r.open_shift ? { "sched-open": true } : { "sched-uncovered": true };
       const mine = myStudentId && r.assignment.student_id === myStudentId;
       return { "sched-mine": mine, "sched-other": !mine };
     },
-    onCellClick(d, h) {
-      if (this.isOpenShift(d, h)) window.location.href = "/open-shifts";
+    onCellClick(r) {
+      if (this.isOpenShift(r)) window.location.href = "/open-shifts";
     },
   },
 });

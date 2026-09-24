@@ -73,22 +73,31 @@
           <tbody>
             <tr v-for="h in HOURS" v-bind:key="h">
               <td class="h mono">[[ hourLabel(h) ]]</td>
-              <td v-for="d in week" v-bind:key="d + '_' + h"
-                  class="reg-cell" v-bind:class="cellClass(d, h)"
-                  v-bind:style="cellStyle(d, h)">
-                <select v-if="row(d, h)"
-                        v-bind:value="row(d, h).assignment ? row(d, h).assignment.student_id : ''"
-                        v-on:change="changeAssignment(row(d, h), $event.target.value)">
-                  <option value="">[[ stateLabel('unassigned') ]]</option>
-                  <option v-for="sid in row(d, h).eligible_student_ids" v-bind:key="sid" v-bind:value="sid">[[ studentLabel(sid) ]]</option>
-                </select>
+              <!-- One select per lane. Each still offers only the students
+                   available for that hour, which now also means only the
+                   students who work that lane. -->
+              <td v-for="d in week" v-bind:key="d + '_' + h" class="reg-cell">
+                <span class="lanes">
+                  <span v-for="r in laneRows(d, h)" v-bind:key="r.slot.id"
+                        class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
+                        v-bind:style="cellStyle(r)"
+                        v-bind:title="r.slot.track !== 'OW' ? 'Unpaid lane (SW/TA)' : null">
+                    <select v-bind:value="r.assignment ? r.assignment.student_id : ''"
+                            v-on:change="changeAssignment(r, $event.target.value)">
+                      <option value="">[[ stateLabel('unassigned') ]]</option>
+                      <option v-for="sid in r.eligible_student_ids" v-bind:key="sid" v-bind:value="sid">[[ studentLabel(sid) ]]</option>
+                    </select>
+                  </span>
+                </span>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
     </template>
-    <div class="weeknote">colour = the student currently assigned · empty select = uncovered</div>
+    <div class="weeknote">colour = the student currently assigned · empty select = uncovered ·
+      a split cell = an hour staffed in both lanes, paid on the left, unpaid (SW/TA) on the right ·
+      each select offers only the students who are available and work that lane</div>
   </section>
 </div>
 {% endblock %}
@@ -109,8 +118,15 @@ const app = createApp({
   },
   computed: {
     rowsByKey() {
+      // A list per hour — an hour staffed in both lanes gets one select per
+      // lane. Keyed one-per-hour, the unpaid lane would replace the paid one
+      // and the overseer would be editing a cell that hides another.
       const map = {};
-      if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
+      if (this.payload) this.payload.slots.forEach(r => {
+        (map[r.slot.date + "_" + r.slot.hour] ||= []).push(r);
+      });
+      Object.values(map).forEach(rows => rows.sort(
+        (a, b) => OIA.byLane(a.slot.track, b.slot.track)));
       return map;
     },
     weeks() {
@@ -142,14 +158,15 @@ const app = createApp({
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
     stateLabel(state) { return OIA.stateLabel(state, this.narrow); },
-    row(d, h) { return this.rowsByKey[d + "_" + h]; },
-    cellClass(d, h) {
-      const r = this.row(d, h);
+    // Only real slots here: unlike the week grid, there is nothing to do in
+    // a cell that has no slot behind it, so an empty hour draws nothing.
+    laneRows(d, h) { return this.rowsByKey[d + "_" + h] || []; },
+    laneMark(r) { return r.slot.track !== "OW" ? "lane-alt" : null; },
+    cellClass(r) {
       if (!r) return {};
       return { "no-eligible": !r.assignment && !r.eligible_student_ids.length };
     },
-    cellStyle(d, h) {
-      const r = this.row(d, h);
+    cellStyle(r) {
       if (r && r.assignment) {
         const s = this.payload.students[r.assignment.student_id];
         if (s) return { background: s.colour + "22" };

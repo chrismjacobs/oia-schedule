@@ -823,6 +823,45 @@ def update_regular_slot(regular_slot_id):
     return jsonify(dict(row.to_dict(), slot_sync=sync))
 
 
+@bp.post("/months/<int:month_id>/regular-slots")
+@overseer_required
+def create_regular_slot(month_id):
+    """Add one cell to a lane for this month, without touching the template.
+
+    Needed because the unpaid lane is opt-in: most of its grid has no row at
+    all, so there is nothing for the PATCH above to edit. Populating from the
+    template can't cover it either — that would apply the pattern everywhere,
+    and this is for the one-off.
+    """
+    month = Month.query.get_or_404(month_id)
+    data = request.get_json(force=True) or {}
+    track = _cell_track(data)
+    state = data.get("state")
+    try:
+        d = date_cls.fromisoformat(data.get("date") or "")
+    except ValueError:
+        return jsonify({"error": "invalid_date"}), 400
+    hour = data.get("hour")
+    if track is None or state not in REGULAR_SLOT_STATES or hour not in SLOT_HOURS:
+        return jsonify({"error": "invalid_cell"}), 400
+    student_id = data.get("student_id") if state == "assigned" else None
+    if state == "assigned" and not student_id:
+        return jsonify({"error": "student_id_required"}), 400
+    if student_id and not _student_in_track(student_id, track):
+        return jsonify({"error": "wrong_track",
+                        "message": f"That student doesn't work the {TRACKS[track]} lane"}), 400
+    if RegularSlot.query.filter_by(month_id=month.id, date=d, hour=hour, track=track).first():
+        return jsonify({"error": "cell_exists"}), 409
+
+    row = RegularSlot(month_id=month.id, date=d, hour=hour, track=track,
+                      state=state, student_id=student_id)
+    db.session.add(row)
+    db.session.flush()
+    sync = _sync_if_built(month)
+    db.session.commit()
+    return jsonify(dict(row.to_dict(), slot_sync=sync)), 201
+
+
 @bp.delete("/regular-slots/<int:regular_slot_id>")
 @overseer_required
 def delete_regular_slot(regular_slot_id):

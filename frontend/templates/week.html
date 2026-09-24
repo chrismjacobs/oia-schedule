@@ -33,36 +33,45 @@
               <td class="h mono">[[ hourLabel(h) ]]</td>
               <template v-for="d in week" v-bind:key="d + '_' + h">
               <td v-if="dayKind(d) === 'out' || dayKind(d) === 'closed'" class="reg-cell" v-bind:class="dayClass(d)" v-bind:title="dayTitle(d)"></td>
-              <td v-else
-                  class="reg-cell" v-bind:class="[cellClass(d, h), dayClass(d)]" v-bind:style="cellStyle(d, h)"
-                  v-bind:title="cellTitle(d, h)">
-                <span class="sched-cell" v-if="row(d, h) && row(d, h).student">
-                  <oia-token v-bind:student="row(d, h).student" size="sm"></oia-token>
-                  <span class="sched-name">[[ studentLabel(row(d, h).student) ]]</span>
-                </span>
-                <span class="adv-cell" v-else-if="row(d, h) && row(d, h).advertised">
-                  <span class="hint">[[ narrow ? 'open' : 'open shift' ]]</span>
-                  <button class="icon-btn" type="button"
-                          v-bind:disabled="busySlot === cellKey(d, h)"
-                          v-on:click="retract(row(d, h))"
-                          aria-label="Retract this open shift">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
-                         stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              <!-- One sub-cell per worker lane. An hour staffed by both a
+                   paid and an unpaid worker is two slots, so it draws two
+                   halves side by side; the usual single-lane hour fills the
+                   cell exactly as before. Side by side, not stacked, so the
+                   row height never changes and the grid still fits a phone. -->
+              <td v-else class="reg-cell" v-bind:class="dayClass(d)">
+                <span class="lanes">
+                <span v-for="r in laneRows(d, h)" v-bind:key="laneKey(d, h, r)"
+                      class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
+                      v-bind:style="cellStyle(r)" v-bind:title="cellTitle(d, h, r)">
+                  <span class="sched-cell" v-if="r && r.student">
+                    <oia-token v-bind:student="r.student" size="sm"></oia-token>
+                    <span class="sched-name">[[ studentLabel(r.student) ]]</span>
+                  </span>
+                  <span class="adv-cell" v-else-if="r && r.advertised">
+                    <span class="hint">[[ narrow ? 'open' : 'open shift' ]]</span>
+                    <button class="icon-btn" type="button"
+                            v-bind:disabled="busySlot === laneKey(d, h, r)"
+                            v-on:click="retract(r)"
+                            aria-label="Retract this open shift">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                           stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                    </button>
+                  </span>
+                  <button class="icon-btn adv-btn" type="button" v-else-if="canAdvertise(d)"
+                          v-bind:disabled="busySlot === laneKey(d, h, r)"
+                          v-on:click.stop="toggleMenu(d, h, r, $event)"
+                          aria-haspopup="menu" v-bind:aria-expanded="!!(menu && menu.key === laneKey(d, h, r))"
+                          v-bind:aria-label="'Open this hour on Open Shifts' + laneSuffix(r)">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                         stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z"/>
+                      <path d="M16 9.5a3.2 3.2 0 0 1 0 5"/>
+                      <path d="M18.8 7a7 7 0 0 1 0 10"/>
+                    </svg>
                   </button>
+                  <span class="leave-pin" v-if="r && r.pending_leave"></span>
                 </span>
-                <button class="icon-btn adv-btn" type="button" v-else-if="canAdvertise(d)"
-                        v-bind:disabled="busySlot === cellKey(d, h)"
-                        v-on:click.stop="toggleMenu(d, h, $event)"
-                        aria-haspopup="menu" v-bind:aria-expanded="!!(menu && menu.key === cellKey(d, h))"
-                        aria-label="Open this hour on Open Shifts">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-                       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z"/>
-                    <path d="M16 9.5a3.2 3.2 0 0 1 0 5"/>
-                    <path d="M18.8 7a7 7 0 0 1 0 10"/>
-                  </svg>
-                </button>
-                <span class="leave-pin" v-if="row(d, h) && row(d, h).pending_leave"></span>
+                </span>
               </td>
               </template>
             </tr>
@@ -73,6 +82,7 @@
     <div class="weeknote">colour + shape = one student at a glance · amber ring = leave requested, not yet approved ·
       hatched = unassigned · solid grey = unavailable (no slot) ·
       📢 puts an empty hour on Open Shifts (announced on LINE, or quietly), ✕ pulls it back ·
+      a split cell = an hour staffed in both lanes — paid on the left, unpaid (SW/TA) on the right ·
       days already past and days outside this month are greyed out</div>
     <p class="error-text pad" v-if="message">[[ message ]]</p>
 
@@ -81,8 +91,8 @@
     <div class="adv-menu" role="menu" v-if="menu" v-on:click.stop
          v-bind:style="{ top: menu.top + 'px', left: menu.left + 'px' }">
       <div class="adv-menu-title mono">[[ menu.d.slice(5) ]] [[ menu.h ]]:00</div>
-      <button type="button" role="menuitem" v-on:click="advertise(menu.d, menu.h, true)">Open + announce on LINE</button>
-      <button type="button" role="menuitem" class="secondary" v-on:click="advertise(menu.d, menu.h, false)">Open quietly — no message</button>
+      <button type="button" role="menuitem" v-on:click="advertise(menu.d, menu.h, menu.row, true)">Open + announce on LINE</button>
+      <button type="button" role="menuitem" class="secondary" v-on:click="advertise(menu.d, menu.h, menu.row, false)">Open quietly — no message</button>
     </div>
 
     <div class="roster">
@@ -112,8 +122,15 @@ const app = createApp({
   },
   computed: {
     rowsByKey() {
+      // A list per hour, not a single row: an hour can be staffed in both
+      // lanes, and keying one row per (date, hour) would let the unpaid one
+      // silently replace the paid one in the grid.
       const map = {};
-      if (this.payload) this.payload.slots.forEach(r => { map[r.slot.date + "_" + r.slot.hour] = r; });
+      if (this.payload) this.payload.slots.forEach(r => {
+        (map[r.slot.date + "_" + r.slot.hour] ||= []).push(r);
+      });
+      Object.values(map).forEach(rows => rows.sort(
+        (a, b) => OIA.byLane(a.slot.track, b.slot.track)));
       return map;
     },
     weeks() {
@@ -156,8 +173,25 @@ const app = createApp({
     async reload() {
       this.payload = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
     },
-    row(date, hour) { return this.rowsByKey[date + "_" + hour]; },
-    cellKey(date, hour) { return date + "_" + hour; },
+    // The lanes to draw for one hour. No slot at all still draws one empty
+    // sub-cell, so an unstaffed hour keeps its advertise button exactly as
+    // it had before lanes existed.
+    laneRows(date, hour) {
+      const rows = this.rowsByKey[date + "_" + hour];
+      return rows && rows.length ? rows : [null];
+    },
+    laneKey(date, hour, r) {
+      return date + "_" + hour + "_" + (r ? r.slot.track : "OW");
+    },
+    laneMark(r) {
+      // The unpaid lane is marked by a rule down its edge, never by colour:
+      // colour and shape belong to the student, and borrowing either would
+      // break the identity tokens (CLAUDE.md #15).
+      return r && r.slot.track !== "OW" ? "lane-alt" : null;
+    },
+    laneSuffix(r) {
+      return r && r.slot.track !== "OW" ? " (unpaid lane)" : "";
+    },
     weekdayLabel(d) { return OIA.weekdayLabel(d); },
     hourLabel(h) { return OIA.hourLabel(h, this.narrow); },
     // 'work' = a working day of this month, 'closed' = a closed date of this
@@ -192,8 +226,7 @@ const app = createApp({
     // Advertising a past hour helps nobody — the offer could never be taken up.
     // Nor on a day the office is closed.
     canAdvertise(d) { return d >= this.todayStr && this.workingDates.has(d); },
-    cellClass(d, h) {
-      const r = this.row(d, h);
+    cellClass(r) {
       if (!r) return { "sched-noslot": true };
       const pending = !!r.pending_leave;
       if (r.student) {
@@ -205,13 +238,11 @@ const app = createApp({
       }
       return { "sched-advertised": r.advertised, "sched-uncovered": !r.advertised, "sched-leave-pending": pending };
     },
-    cellStyle(d, h) {
-      const r = this.row(d, h);
+    cellStyle(r) {
       if (r && r.student && r.status === "scheduled") return { background: r.student.colour + "22" };
       return {};
     },
-    cellTitle(d, h) {
-      const r = this.row(d, h);
+    cellTitle(d, h, r) {
       if (r && r.pending_leave) {
         const who = r.pending_leave.student
           ? (r.pending_leave.student.english_name || r.pending_leave.student.chinese_name)
@@ -226,26 +257,25 @@ const app = createApp({
     // The 📢 icon asks how to open the hour: announced to the LINE group, or
     // quietly (on Open Shifts, no message — e.g. the overseer already knows
     // who'll take it back). Menu sits just under the icon, in viewport space.
-    toggleMenu(d, h, ev) {
-      const key = this.cellKey(d, h);
+    toggleMenu(d, h, r, ev) {
+      const key = this.laneKey(d, h, r);
       if (this.menu && this.menu.key === key) { this.menu = null; return; }
       const rect = ev.currentTarget.getBoundingClientRect();
       const width = 210;
       const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
-      this.menu = { key, d, h, top: rect.bottom + 4, left };
+      this.menu = { key, d, h, row: r, top: rect.bottom + 4, left };
       this.$nextTick(() => {
         const first = document.querySelector(".adv-menu [role=menuitem]");
         if (first) first.focus();
       });
     },
     closeMenu() { this.menu = null; },
-    async advertise(d, h, announce) {
-      const key = this.cellKey(d, h);
+    async advertise(d, h, r, announce) {
+      const key = this.laneKey(d, h, r);
       this.menu = null;
       this.busySlot = key;
       this.message = "";
       try {
-        const r = this.row(d, h);
         // A cell with no Slot behind it is addressed by (month, date, hour) —
         // the backend creates the Slot on demand.
         await OIA.api.post("/api/leave/advertise", Object.assign(r
@@ -261,7 +291,7 @@ const app = createApp({
       }
     },
     async retract(r) {
-      this.busySlot = this.cellKey(r.slot.date, r.slot.hour);
+      this.busySlot = this.laneKey(r.slot.date, r.slot.hour, r);
       this.message = "";
       try {
         await OIA.api.del("/api/leave/reopened/" + r.reopened_id);

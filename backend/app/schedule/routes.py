@@ -6,6 +6,7 @@ from app.models import Month, Schedule, Assignment, Slot, Availability, Student,
 from app.schedule.solver import solve_month
 from app.utils.decorators import overseer_required, login_required_api
 from app.utils.settings import get_solver_weights, get_floor_hours
+from app.utils.tracks import TRACKS, track_for
 from app.utils.tz import local_now
 from app.notifications.service import notify_committed
 
@@ -42,6 +43,27 @@ def generate_draft(month_id):
     month.state = "review"
     db.session.commit()
     return jsonify({"schedule": schedule.to_dict(), "meta": meta}), 201
+
+
+def _wrong_lane(student_id, slot):
+    """A lane is the worker type, strictly (CLAUDE.md, worker lanes).
+
+    A cross-lane pick is already impossible by accident — a student can only
+    hold availability in their own lane — but that path reports "not available
+    for this slot", which reads as a scheduling problem rather than the real
+    one. Say which it is, so the overseer looks at the student's worker type
+    instead of at their submitted hours.
+    """
+    student = Student.query.get(student_id)
+    if student is None:
+        return jsonify({"error": "unknown_student"}), 400
+    if track_for(student) != slot.track:
+        return jsonify({
+            "error": "wrong_track",
+            "message": (f"{student.short_name} works the {TRACKS[track_for(student)]} "
+                        f"lane; this hour is {TRACKS[slot.track]}."),
+        }), 400
+    return None
 
 
 def _schedule_payload(schedule):
@@ -168,6 +190,9 @@ def edit_assignment(assignment_id):
     new_student_id = data.get("student_id")
 
     if new_student_id is not None:
+        wrong_lane = _wrong_lane(new_student_id, assignment.slot)
+        if wrong_lane:
+            return wrong_lane
         eligible = Availability.query.filter_by(slot_id=assignment.slot_id, student_id=new_student_id).first()
         if not eligible:
             return jsonify({"error": "student_not_available_for_slot"}), 400
@@ -198,12 +223,15 @@ def create_assignment(month_id):
         return jsonify({"error": "no_draft_yet"}), 409
     if Assignment.query.filter_by(schedule_id=schedule.id, slot_id=slot_id).first():
         return jsonify({"error": "slot_already_assigned"}), 409
+    slot = Slot.query.get_or_404(slot_id)
+    wrong_lane = _wrong_lane(student_id, slot)
+    if wrong_lane:
+        return wrong_lane
     if not Availability.query.filter_by(slot_id=slot_id, student_id=student_id).first():
         return jsonify({"error": "student_not_available_for_slot"}), 400
 
     a = Assignment(schedule_id=schedule.id, slot_id=slot_id, student_id=student_id, source="manual_edit")
     db.session.add(a)
-    slot = Slot.query.get(slot_id)
     slot.state = "assigned"
     db.session.commit()
     return jsonify(a.to_dict()), 201

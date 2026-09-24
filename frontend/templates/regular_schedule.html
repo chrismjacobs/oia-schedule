@@ -166,8 +166,29 @@
       before slots are built, they're built from this plan first.</p>
   </div>
 
+  <!-- Both grids below show one lane at a time. Two grids rather than two
+       selects per cell: the lanes are edited separately, and the unpaid one
+       is mostly empty, so showing them together would be mostly blank space. -->
+  <div class="panel lane-switch">
+    <h2>Worker lane 工讀類別</h2>
+    <div class="tabs" style="max-width:360px;">
+      <button type="button" class="tab" v-for="t in LANE_ORDER" v-bind:key="t"
+              v-bind:class="{ on: lane === t }" v-on:click="lane = t">[[ LANE_LABELS[t] ]]</button>
+    </div>
+    <p class="hint" style="margin-top:8px;" v-if="lane === 'OW'">
+      The paid roster. Every weekday hour is staffed unless it is marked
+      <strong>unavailable</strong>.
+    </p>
+    <p class="hint" style="margin-top:8px;" v-else>
+      The unpaid roster — service workers and TAs. This one is the other way
+      round: an hour is staffed only where you say so, so most of the grid
+      reads <strong>none</strong>. An hour set here runs alongside the paid
+      worker on the same hour, not instead of them.
+    </p>
+  </div>
+
   <div class="panel">
-    <h2>Master template 固定班表樣板</h2>
+    <h2>Master template 固定班表樣板 <span class="hint">[[ LANE_LABELS[lane] ]]</span></h2>
     <p class="hint">
       The recurring weekly pattern — set once, applied to every month generated afterward.
       <strong>Unavailable</strong> hours never get a slot at all (the office isn't staffed then).
@@ -191,9 +212,10 @@
                 v-bind:style="templateCellStyle(wd, h)">
               <select v-bind:value="templateCellValue(wd, h)"
                       v-on:change="onTemplateCellChange(wd, h, $event.target.value)">
+                <option value="none" v-if="lane !== 'OW'">none</option>
                 <option value="unavailable">[[ stateLabel('unavailable') ]]</option>
                 <option value="unassigned">[[ stateLabel('unassigned') ]]</option>
-                <option v-for="s in students" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
+                <option v-for="s in laneStudents" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
               </select>
             </td>
           </tr>
@@ -229,12 +251,16 @@
                   <td v-for="d in week" v-bind:key="d + '_' + h"
                       class="reg-cell" v-bind:class="regularCellClass(d, h)"
                       v-bind:style="regularCellStyle(d, h)">
-                    <select v-if="regularRow(d, h)"
+                    <!-- In the unpaid lane most cells have no row at all,
+                         and "none" is a real answer there, so the select is
+                         always offered rather than only where a row exists. -->
+                    <select v-if="regularRow(d, h) || lane !== 'OW'"
                             v-bind:value="regularCellValue(d, h)"
                             v-on:change="onRegularCellChange(d, h, $event.target.value)">
+                      <option value="none" v-if="lane !== 'OW'">none</option>
                       <option value="unavailable">[[ stateLabel('unavailable') ]]</option>
                       <option value="unassigned">[[ stateLabel('unassigned') ]]</option>
-                      <option v-for="s in students" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
+                      <option v-for="s in laneStudents" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
                     </select>
                   </td>
                 </tr>
@@ -286,6 +312,7 @@ const app = createApp({
       newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
       swOpens: "", swCloses: "", genMessage: "",
       window: null, slotCount: null, closeout: null, reportMessage: "",
+      lane: "OW", LANE_ORDER: OIA.LANE_ORDER, LANE_LABELS: OIA.LANE_LABELS,
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
@@ -297,16 +324,25 @@ const app = createApp({
       this.students.forEach(s => { map[s.id] = s; });
       return map;
     },
+    // Both grids show one lane at a time, so the maps are filtered rather
+    // than keyed by lane — a cell lookup stays (weekday, hour) / (date, hour).
     templateByKey() {
       const map = {};
-      this.template.forEach(r => { map[r.weekday + "_" + r.hour] = r; });
+      this.template.forEach(r => {
+        if (r.track === this.lane) map[r.weekday + "_" + r.hour] = r;
+      });
       return map;
     },
     regularByKey() {
       const map = {};
-      this.regularSlots.forEach(r => { map[r.date + "_" + r.hour] = r; });
+      this.regularSlots.forEach(r => {
+        if (r.track === this.lane) map[r.date + "_" + r.hour] = r;
+      });
       return map;
     },
+    // A lane is the worker type, so only that lane's students can be named
+    // in it — same rule the server enforces.
+    laneStudents() { return this.students.filter(s => OIA.laneOf(s) === this.lane); },
     weeks() {
       // A day closed after the pattern was copied still has regular_slot
       // rows; leave it out — editing a closed day's hours means nothing.
@@ -333,6 +369,9 @@ const app = createApp({
       if (!this.regularSlots.length || !this.template.length) return 0;
       let n = 0;
       this.regularSlots.forEach(r => {
+        // templateByKey holds only the lane on show, so a row from the other
+        // lane would be compared against the wrong cell entirely.
+        if (r.track !== this.lane) return;
         const wd = OIA.mondayWeekday(r.date);
         const t = this.templateByKey[wd + "_" + r.hour];
         if (!t) return;
@@ -370,7 +409,10 @@ const app = createApp({
     templateRow(wd, h) { return this.templateByKey[wd + "_" + h]; },
     templateCellValue(wd, h) {
       const row = this.templateRow(wd, h);
-      if (!row || row.state === "unassigned") return "unassigned";
+      // No row means "no worker of this kind here" in the opt-in lane, but
+      // "staff it, nobody named yet" in the paid one.
+      if (!row) return this.lane === "OW" ? "unassigned" : "none";
+      if (row.state === "unassigned") return "unassigned";
       if (row.state === "unavailable") return "unavailable";
       return "assigned:" + row.student_id;
     },
@@ -386,18 +428,24 @@ const app = createApp({
       return {};
     },
     async onTemplateCellChange(wd, h, value) {
+      const drop = r => !(r.weekday === wd && r.hour === h && r.track === this.lane);
+      if (value === "none") {
+        await OIA.api.del("/api/admin/regular-template/cell",
+                          { weekday: wd, hour: h, track: this.lane });
+        this.template = this.template.filter(drop);
+        return;
+      }
       const [state, studentIdStr] = value.split(":");
-      const body = { weekday: wd, hour: h, state, student_id: studentIdStr ? Number(studentIdStr) : null };
+      const body = { weekday: wd, hour: h, state, track: this.lane,
+                     student_id: studentIdStr ? Number(studentIdStr) : null };
       const row = await OIA.api.put("/api/admin/regular-template/cell", body);
-      const list = this.template.filter(r => !(r.weekday === wd && r.hour === h));
-      list.push(row);
-      this.template = list;
+      this.template = this.template.filter(drop).concat([row]);
     },
 
     regularRow(d, h) { return this.regularByKey[d + "_" + h]; },
     regularCellValue(d, h) {
       const row = this.regularRow(d, h);
-      if (!row) return "unassigned";
+      if (!row) return this.lane === "OW" ? "unassigned" : "none";
       if (row.state === "assigned") return "assigned:" + row.student_id;
       return row.state;
     },
@@ -414,13 +462,27 @@ const app = createApp({
     },
     async onRegularCellChange(d, h, value) {
       const row = this.regularRow(d, h);
-      if (!row) return;
       const [state, studentIdStr] = value.split(":");
-      const body = { state, student_id: studentIdStr ? Number(studentIdStr) : null };
-      const updated = await OIA.api.patch("/api/admin/regular-slots/" + row.id, body);
-      const list = this.regularSlots.filter(r => r.id !== updated.id);
-      list.push(updated);
-      this.regularSlots = list;
+      const studentId = studentIdStr ? Number(studentIdStr) : null;
+
+      // "none" removes the cell from this lane for this month — not the same
+      // as unavailable, which in the opt-in lane would say the same thing
+      // twice, and in the paid one means something else entirely.
+      if (value === "none") {
+        if (!row) return;
+        const res = await OIA.api.del("/api/admin/regular-slots/" + row.id);
+        this.regularSlots = this.regularSlots.filter(r => r.id !== row.id);
+        await this.showSync(res.slot_sync, "grid");
+        return;
+      }
+
+      const updated = row
+        ? await OIA.api.patch("/api/admin/regular-slots/" + row.id,
+                              { state, student_id: studentId })
+        : await OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots",
+                             { date: d, hour: h, state, track: this.lane, student_id: studentId });
+      this.regularSlots = this.regularSlots
+        .filter(r => r.id !== updated.id).concat([updated]);
       await this.showSync(updated.slot_sync, "grid");
     },
     // A plan change came back with a slot-sync summary (null when the month

@@ -31,7 +31,9 @@
     post: (p, b) => request("POST", p, b),
     put: (p, b) => request("PUT", p, b),
     patch: (p, b) => request("PATCH", p, b),
-    del: (p) => request("DELETE", p),
+    // Body optional: most deletes address a row by id in the path, but a
+    // regular-template cell is addressed by (weekday, hour, lane).
+    del: (p, b) => request("DELETE", p, b),
   };
 
   // ---------------- bilingual formatting (student names, task titles) ----------------
@@ -214,8 +216,26 @@
   }
   document.addEventListener("DOMContentLoaded", initHeader);
 
+  // Worker lanes, paid first. Every grid that draws both lanes in one cell
+  // orders them by this, so a student always sits in the same half of the
+  // cell (app/utils/tracks.py is the server side of the same idea).
+  const LANE_ORDER = ["OW", "SW"];
+  function laneRank(track) {
+    const i = LANE_ORDER.indexOf(track);
+    return i === -1 ? LANE_ORDER.length : i;
+  }
+  function byLane(a, b) { return laneRank(a) - laneRank(b); }
+  // Mirrors track_for() in app/utils/tracks.py — TA works the unpaid lane,
+  // and a student nobody has classified yet falls back to the paid one.
+  function laneOf(student) {
+    if (!student) return "OW";
+    return (student.worker_type === "SW" || student.worker_type === "TA") ? "SW" : "OW";
+  }
+  const LANE_LABELS = { OW: "Paid (OW)", SW: "Unpaid (SW/TA)" };
+
   window.OIA = {
     api, bilingual, shapeSVG, weekdayLabel, registerGlobals, flagLabel,
     groupIntoWeeks, monthWeeks, watchNarrow, shortName, hourLabel, stateLabel, mondayWeekday,
+    LANE_ORDER, LANE_LABELS, laneRank, byLane, laneOf,
   };
 })();
