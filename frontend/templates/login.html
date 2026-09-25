@@ -17,7 +17,10 @@
       <p class="error-text" v-if="error">[[ error ]]</p>
       <button type="submit" v-bind:disabled="busy">Log in</button>
     </form>
-    <p class="hint" style="margin-top:14px;">Have an invite link? <a href="/register">Register here</a>.</p>
+    <!-- Students are added by the office, not by registering themselves.
+         The /register routes still work so an invite already sent can be
+         accepted, but nothing points at them any more. -->
+    <p class="hint" style="margin-top:14px;">No account? Ask the office to set one up for you.</p>
   </div>
 </section>
 {% endblock %}

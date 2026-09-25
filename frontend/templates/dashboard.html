@@ -170,16 +170,44 @@
         </tbody>
       </table>
     </div>
-    <form v-on:submit.prevent="sendInvite" class="field-row" style="margin-top:10px;">
-      <div class="field"><label>Invite a student (choose their username)</label>
-        <input type="text" v-model="inviteUsername" required maxlength="64"
-               pattern="[A-Za-z0-9._\-]+" title="Letters, numbers, dot, dash or underscore"
-               autocapitalize="none" autocorrect="off" spellcheck="false"></div>
-      <div class="field" style="align-self:end;"><button v-bind:disabled="busy" type="submit">Create invite</button></div>
+    <!-- Added here rather than invited: with a dozen students at a time the
+         overseer already knows the names, and a registration link was one
+         more thing to send and chase. Students never set their own details. -->
+    <h3 style="margin-top:14px;">Add a student 新增工讀生</h3>
+    <form v-on:submit.prevent="addStudent">
+      <!-- Labels carry for/id here so clicking one focuses its field and a
+           screen reader announces the pair. The older forms on this page
+           don't; worth doing on new markup rather than matching that. -->
+      <div class="field-row" style="margin-top:6px;">
+        <div class="field"><label for="ns-zh">Chinese name 中文姓名</label>
+          <input id="ns-zh" type="text" v-model="newStudent.chinese_name" maxlength="64"></div>
+        <div class="field"><label for="ns-en">English name</label>
+          <input id="ns-en" type="text" v-model="newStudent.english_name" maxlength="64"></div>
+        <div class="field"><label for="ns-sid">Student ID 學號</label>
+          <input id="ns-sid" type="text" v-model="newStudent.student_id" required maxlength="32"
+                 autocapitalize="characters" autocorrect="off" spellcheck="false"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="ns-wt">Worker type 類別</label>
+          <select id="ns-wt" v-model="newStudent.worker_type">
+            <option value="">— not set (treated as paid) —</option>
+            <option v-for="(label, key) in WORKER_TYPES" v-bind:key="key" v-bind:value="key">[[ key ]] — [[ label ]]</option>
+          </select></div>
+        <div class="field"><label for="ns-user">Username 帳號</label>
+          <input id="ns-user" type="text" v-model="newStudent.username" required maxlength="64"
+                 pattern="[A-Za-z0-9._\-]+" title="Letters, numbers, dot, dash or underscore"
+                 autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+        <div class="field"><label for="ns-pw">Password 密碼</label>
+          <input id="ns-pw" type="text" v-model="newStudent.password" required minlength="6"></div>
+        <div class="field" style="align-self:end;">
+          <button v-bind:disabled="busy" type="submit">Add student</button></div>
+      </div>
+      <p class="hint">At least one name. The colour and shape are assigned automatically.
+        Tell the student their username and password — they don't register themselves.</p>
     </form>
-    <p class="error-text" v-if="inviteError">[[ inviteError ]]</p>
-    <p class="hint" v-if="inviteResult">Invite for <span class="mono">[[ inviteResult.username ]]</span> — pass on this link:
-      <span class="mono">/register/[[ inviteResult.invite_token ]]</span></p>
+    <p class="error-text" v-if="addError">[[ addError ]]</p>
+    <p class="hint" v-if="addResult">Added <strong>[[ addResult.chinese_name ]] [[ addResult.english_name ]]</strong>
+      — username <span class="mono">[[ addResult.username ]]</span>.</p>
   </div>
 
   <section class="pad">
@@ -279,6 +307,10 @@ const { createApp } = Vue;
 const PALETTE = {{ palette|tojson }};
 const SHAPES = {{ shapes|tojson }};
 const WORKER_TYPES = {{ worker_types|tojson }};
+function blankStudent() {
+  return { chinese_name: "", english_name: "", student_id: "",
+           worker_type: "", username: "", password: "" };
+}
 const FUNDING_CATEGORIES = {{ funding_categories|tojson }};
 // What each funding source is called in the narrow table cell. Keyed by the
 // portal's own option value, so the full label stays the single definition in
@@ -292,7 +324,7 @@ const app = createApp({
   data() {
     return {
       months: [], monthId: null, data: null, loading: false,
-      students: [], inviteUsername: "", inviteResult: null, inviteError: "", busy: false,
+      students: [], newStudent: blankStudent(), addResult: null, addError: "", busy: false,
       // One student is edited at a time, in a form under their row, behind an
       // explicit Edit button — so a stray click or tab can't change a name.
       editingId: null, draft: {}, editError: "",
@@ -472,14 +504,14 @@ const app = createApp({
       if (code === "invalid_funding_category") return "Pick a funding source from the list.";
       return (e.payload && e.payload.message) || e.message;
     },
-    async sendInvite() {
-      this.busy = true; this.inviteResult = null; this.inviteError = "";
+    async addStudent() {
+      this.busy = true; this.addResult = null; this.addError = "";
       try {
-        this.inviteResult = await OIA.api.post("/api/admin/invites", { username: this.inviteUsername });
-        this.inviteUsername = "";
+        this.addResult = await OIA.api.post("/api/admin/students", this.newStudent);
+        this.newStudent = blankStudent();
         await this.loadStudents();
       } catch (e) {
-        this.inviteError = this.fieldError(e);
+        this.addError = this.fieldError(e);
       } finally { this.busy = false; }
     },
     async loginAs(s) {

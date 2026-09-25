@@ -19,6 +19,8 @@ from app.models import (
     USERNAME_RE, normalize_username,
 )
 from app.utils.decorators import overseer_required
+from app.utils.identity import assign_token
+from app.utils.tz import local_now
 from app.utils.settings import get_setting, set_setting, get_solver_weights, get_session_rules
 from app.utils.periods import weekdays_in_month
 from app.utils.slot_sync import (
@@ -132,7 +134,10 @@ def list_students():
     q = Student.query
     if semester_id:
         q = q.filter_by(semester_id=semester_id)
-    students = q.order_by(Student.english_name).all()
+    # Inactive last, then by name. Deactivating is how somebody leaves
+    # without losing their history, so they shouldn't keep a place in
+    # the middle of the working roster.
+    students = q.order_by(Student.is_active.desc(), Student.english_name).all()
     out = []
     for s in students:
         d = s.to_dict()
@@ -204,6 +209,89 @@ def create_invite():
     db.session.add(user)
     db.session.commit()
     return jsonify({"username": username, "invite_token": token}), 201
+
+
+@bp.post("/students")
+@overseer_required
+def create_student():
+    """Add a student and their login in one step, no invite round trip.
+
+    Registration existed so a student could fill in their own names and
+    password from a link. With a dozen students at a time the overseer
+    already knows all of that, and the link was one more thing to chase and
+    to leave lying around unaccepted — so this writes both rows directly.
+
+    A username that exists only as an unaccepted invite is adopted rather
+    than refused. That invite is the same person, and abandoning it would
+    leave a live registration link pointing at an account that now has a
+    password.
+    """
+    data = request.get_json(force=True) or {}
+    chinese_name = (data.get("chinese_name") or "").strip()
+    english_name = (data.get("english_name") or "").strip()
+    raw_student_id = (data.get("student_id") or "").strip()
+    password = data.get("password") or ""
+    worker_type = (data.get("worker_type") or "").strip().upper() or None
+
+    if not chinese_name and not english_name:
+        return jsonify({"error": "name_required",
+                        "message": "Provide at least one of Chinese/English name"}), 400
+    if not STUDENT_ID_RE.match(raw_student_id) or len(raw_student_id) > STUDENT_ID_MAX:
+        return jsonify({"error": "invalid_student_id",
+                        "message": f"Student ID must be letters and numbers only, "
+                                   f"up to {STUDENT_ID_MAX} characters"}), 400
+    if Student.query.filter(db.func.lower(Student.student_id) == raw_student_id.lower()).first():
+        return jsonify({"error": "student_id_taken",
+                        "message": "Another student already has that ID"}), 409
+    if worker_type is not None and worker_type not in WORKER_TYPES:
+        return jsonify({"error": "invalid_worker_type",
+                        "message": f"Worker type must be one of {', '.join(WORKER_TYPES)}"}), 400
+    if len(password) < OVERSEER_SET_PASSWORD_MIN:
+        return jsonify({"error": "weak_password",
+                        "message": f"Password must be at least {OVERSEER_SET_PASSWORD_MIN} characters"}), 400
+
+    # An unaccepted invite for this username is this person — take it over.
+    username = normalize_username(data.get("username"))
+    existing = User.query.filter(db.func.lower(User.username) == username).first()
+    if existing and (existing.student_id or existing.invite_accepted_at):
+        return jsonify({"error": "username_taken",
+                        "message": "That username is already in use"}), 409
+    if not existing:
+        username, err = _check_username(data.get("username"))
+        if err:
+            return err
+
+    semester = Semester.query.filter_by(is_active=True).first()
+    if not semester:
+        return jsonify({"error": "no_active_semester",
+                        "message": "Create a semester first"}), 400
+
+    colour, shape = assign_token(semester.id)
+    student = Student(
+        semester_id=semester.id, chinese_name=chinese_name, english_name=english_name,
+        student_id=raw_student_id, colour=colour, shape=shape, worker_type=worker_type,
+    )
+    db.session.add(student)
+    db.session.flush()
+
+    user = existing or User(username=username, role="student")
+    user.student_id = student.id
+    user.set_password(password)
+    # Both cleared: there is nothing left to accept, and an invite token left
+    # behind is a registration link that still works.
+    user.invite_token = None
+    user.invite_accepted_at = local_now()
+    db.session.add(user)
+    db.session.commit()
+
+    current_app.logger.info(
+        "student ADDED by overseer | %s (%s) username=%s worker_type=%s%s",
+        student.short_name, student.student_id, user.username, worker_type or "not set",
+        " [adopted a pending invite]" if existing else "")
+
+    out = student.to_dict()
+    out["username"] = user.username
+    return jsonify(out), 201
 
 
 @bp.patch("/students/<int:student_id>")
