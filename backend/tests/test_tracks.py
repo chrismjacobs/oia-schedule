@@ -383,6 +383,73 @@ def test_detail_report_separates_a_miss_from_a_future_shift(app):
     assert upcoming["missed"] == [], "a shift still to come is not a no-show"
 
 
+def test_two_students_in_one_hour_record_independently(app):
+    """The new everyday case: a paid and an unpaid worker on the same hour,
+    signing in and out around the same time.
+
+    They hold different slots, so nothing is shared — but the sign-in path
+    keys "hours already recorded today" by student, and if that were keyed by
+    slot or by date alone, the first one in would swallow the other's hour and
+    the second would read as a no-show for a shift they actually worked.
+    """
+    from app.dashboard.routes import build_month_dashboard, build_month_detail
+    from app.models import AttendanceSession, SessionHour
+    from app.attendance.routes import _covered_slot_ids
+    from app.utils.tz import local_now
+
+    month = make_month()
+    d = date(2026, 10, 5)
+    db.session.add(RegularSlot(month_id=month.id, date=d, hour=13,
+                               state="unassigned", track="SW"))
+    db.session.flush()
+    sync_month_slots(month)
+    db.session.commit()
+
+    ow, sw = make_student(1, "OW"), make_student(2, "SW")
+    schedule = Schedule(month_id=month.id, status="committed")
+    db.session.add(schedule)
+    db.session.flush()
+
+    pairs = []
+    for student, track in ((ow, "OW"), (sw, "SW")):
+        slot = Slot.query.filter_by(month_id=month.id, date=d, hour=13, track=track).one()
+        db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot.id,
+                                  student_id=student.id, source="solver"))
+        pairs.append((student, slot))
+    db.session.commit()
+
+    # Both sign in, then both sign out — same hour, same minute.
+    now = local_now()
+    for student, slot in pairs:
+        sess = AttendanceSession(student_id=student.id, date=d,
+                                 signed_in_at=now, signed_out_at=now)
+        db.session.add(sess)
+        db.session.flush()
+        db.session.add(SessionHour(session_id=sess.id, slot_id=slot.id))
+    db.session.commit()
+
+    # Neither student's "already recorded" set contains the other's hour.
+    for student, slot in pairs:
+        other_slot = next(s for st, s in pairs if st is not student)
+        covered = _covered_slot_ids(student.id, d)
+        assert covered == {slot.id}
+        assert other_slot.id not in covered
+
+    report = build_month_dashboard(month)
+    by_student = {r["student_id"]: r for r in report["gap"]}
+    for student, _ in pairs:
+        assert by_student[student.id]["recorded_hours"] == 1
+        assert by_student[student.id]["gap"] == 0
+    assert report["no_shows"] == [], "neither was mistaken for a no-show"
+    assert report["signed_in_not_scheduled"] == []
+
+    detail = {r["student_id"]: r for r in build_month_detail(month)}
+    for student, _ in pairs:
+        day = next(x for x in detail[student.id]["days"] if x["date"] == d.isoformat())
+        assert day["status"] == "recorded"
+        assert day["recorded"] == ["13:00-14:00"]
+
+
 def test_dashboard_names_unclassified_students(app):
     """worker_type decides the lane, so an unset one must be visible rather
     than quietly resolving to the paid lane."""
