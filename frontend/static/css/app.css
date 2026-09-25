@@ -279,14 +279,25 @@ td.reg-cell select:focus-visible { outline: 2px solid var(--accent); outline-off
 .avail-cell.avail-open { background: var(--avail-blue-bg); }
 .avail-cell.avail-mine { background: #E7F0EB; }
 
-.avail-label { font-size: 11px; line-height: 1.2; color: var(--ink-2); padding: 0 2px; }
-.avail-taken .avail-label { color: var(--ink-3); }
-.avail-required .avail-label { color: var(--fill-req); font-weight: 700; }
-.avail-open .avail-label { color: var(--avail-blue); }
-.avail-mine .avail-label { color: var(--ok); }
+/* The cells carry an icon or nothing at all — never a word. Each kind has its
+   own flat colour and the key under the heading names every one of them.
+
+   Fixed layout so the five day columns are exactly equal. Left to itself the
+   table sizes them from the widest thing in each, which is the date heading —
+   "Mon 09-01" against "Wed 09-10" is a two or three pixel difference, and once
+   the cells hold nothing but a centred icon that reads as a crooked grid.
+   Scoped to this table: the other grids size themselves around names and
+   selects and want the automatic layout. */
+table.grid.avail-grid { table-layout: fixed; }
+table.grid.avail-grid th.h, table.grid.avail-grid td.h { width: 58px; }
+@media (max-width: 640px) {
+  table.grid.avail-grid th.h, table.grid.avail-grid td.h { width: 38px; }
+}
+
 .avail-ico { display: block; margin: 0 auto; }
 .avail-unavailable .avail-ico { color: #7D8890; }
 .avail-taken .avail-ico { color: var(--ink-3); }
+.avail-required .avail-ico { color: var(--fill-req); }
 .avail-tick { color: #fff; font-weight: 700; font-size: 14px; }
 
 /* The key: the same cells at full size, each with what it means. */
@@ -304,7 +315,6 @@ td.reg-cell select:focus-visible { outline: 2px solid var(--accent); outline-off
 .avail-key .d { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 
 @media (max-width: 640px) {
-  .avail-label { font-size: 10px; }
   .avail-key { grid-template-columns: 1fr; }
 }
 

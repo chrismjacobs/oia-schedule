@@ -20,11 +20,7 @@
           <div class="sample reg-cell avail-cell" v-bind:class="'avail-' + k.cat"
                v-bind:style="k.cat === 'mine' ? { background: 'var(--ok)' } : null">
             <span class="avail-tick" v-if="k.cat === 'mine'">✓</span>
-            <svg class="avail-ico" v-else-if="k.cat === 'unavailable'" v-bind:width="18" height="18"
-                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>
-            </svg>
-            <span class="avail-label" v-else>[[ k.label ]]</span>
+            <avail-icon v-else v-bind:cat="k.cat" v-bind:size="18"></avail-icon>
           </div>
           <div>
             <div class="t">[[ k.label ]] <span class="hint">[[ k.en ]]</span></div>
@@ -42,7 +38,7 @@
       <template v-for="(week, wi) in weeks" v-bind:key="wi">
         <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
         <div class="weekwrap">
-          <table class="grid">
+          <table class="grid avail-grid">
             <thead>
               <tr>
                 <th class="h">時 / hr</th>
@@ -63,25 +59,12 @@
                     v-bind:style="cellStyle(d,h)"
                     v-bind:title="cellTitle(d,h)"
                     v-on:click="toggle(d,h)">
+                  <!-- Icon only, never a word: colour carries the kind, the
+                       key underneath names it, and the column stays the same
+                       width as every other one. -->
                   <span class="avail-tick" v-if="isSelected(d,h)">✓</span>
-                  <template v-else-if="category(d,h) === 'out'"></template>
-                  <template v-else>
-                    <!-- Closed day or an hour the office isn't staffed. -->
-                    <svg class="avail-ico" v-if="category(d,h) === 'unavailable'" width="16" height="16"
-                         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>
-                    </svg>
-                    <!-- Someone else's regular hour: spelled out on a wide
-                         screen, one figure icon where there's no room. -->
-                    <template v-else-if="category(d,h) === 'taken'">
-                      <svg class="avail-ico" v-if="narrow" width="15" height="15" viewBox="0 0 24 24"
-                           fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
-                        <circle cx="12" cy="8" r="3.4"/><path d="M5.5 19.5a6.5 6.5 0 0 1 13 0"/>
-                      </svg>
-                      <span class="avail-label" v-else>已有固定人員</span>
-                    </template>
-                    <span class="avail-label" v-else>[[ cellLabel(d,h) ]]</span>
-                  </template>
+                  <avail-icon v-else-if="category(d,h) !== 'out'"
+                              v-bind:cat="category(d,h)"></avail-icon>
                 </td>
               </tr>
             </tbody>
@@ -112,15 +95,15 @@ const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const myStudentId = (window.CURRENT_USER && window.CURRENT_USER.student) ? window.CURRENT_USER.student.id : null;
 
-// One flat colour per kind of hour. `label` is what the cell says on a wide
-// screen, `short` its two-character form on a phone; the key below the
-// heading explains each one in full.
+// One flat colour per kind of hour. The cells themselves carry no words — the
+// label is what the key below the heading calls each kind, and what the cell
+// says on hover and to a screen reader.
 const CATEGORIES = {
-  open:        { label: "可自由選填", short: "可選", en: "Fill optional" },
-  mine:        { label: "我的固定班", short: "固定", en: "My regular hour" },
-  taken:       { label: "已有固定人員", short: "", en: "Regular taken" },
-  required:    { label: "需要填補", short: "需填", en: "Fill required" },
-  unavailable: { label: "不開放", short: "", en: "Not available" },
+  open:        { label: "可自由選填", en: "Fill optional" },
+  mine:        { label: "我的固定班", en: "My regular hour" },
+  taken:       { label: "已有固定人員", en: "Regular taken" },
+  required:    { label: "需要填補", en: "Fill required" },
+  unavailable: { label: "不開放", en: "Not available" },
 };
 const KEY = [
   { cat: "open", zh: "任何人都可以選填的時段。勾選代表你那個時間可以上班。" },
@@ -129,8 +112,38 @@ const KEY = [
   { cat: "required", zh: "原本的固定班同學本月不上班，這個時段需要有人補上。" },
   { cat: "unavailable", zh: "休假日或辦公室不排班的時段，無法選填。" },
 ].map(k => Object.assign({}, CATEGORIES[k.cat], k));
+
+// One icon per kind of hour, used in the grid and in the key below it, so the
+// sample the student reads is literally the cell they are looking at.
+//
+// The cells carry no words. Each kind already has its own flat colour, the key
+// spells every one of them out underneath, and most students open this on a
+// phone — where a four-character label either wraps, ellipses, or drags that
+// column wider than the rest. An "open" hour stays deliberately empty: it is
+// the invitation to tap, and an icon there would compete with the tick that
+// appears when they do.
+const AvailIcon = {
+  props: { cat: { type: String, required: true }, size: { type: Number, default: 16 } },
+  template: `
+    <svg v-if="cat === 'unavailable'" class="avail-ico" v-bind:width="size" v-bind:height="size"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>
+    </svg>
+    <svg v-else-if="cat === 'taken'" class="avail-ico" v-bind:width="size - 1" v-bind:height="size - 1"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+         stroke-linecap="round" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.4"/><path d="M5.5 19.5a6.5 6.5 0 0 1 13 0"/>
+    </svg>
+    <svg v-else-if="cat === 'required'" class="avail-ico" v-bind:width="size" v-bind:height="size"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+         stroke-linecap="round" aria-hidden="true">
+      <path d="M12 3.5 1.8 20.5h20.4L12 3.5Z"/><path d="M12 10v4.2"/><path d="M12 17.4v.1"/>
+    </svg>`,
+};
+
 const app = createApp({
   delimiters: ['[[', ']]'],
+  components: { "avail-icon": AvailIcon },
   data() {
     return {
       month: null, dates: [], cells: [], selected: new Set(),
@@ -212,10 +225,6 @@ const app = createApp({
     cellClass(date, hour) {
       const cat = this.category(date, hour);
       return cat === "out" ? "day-out" : "avail-" + cat;
-    },
-    cellLabel(date, hour) {
-      const cat = CATEGORIES[this.category(date, hour)];
-      return this.narrow ? cat.short : cat.label;
     },
     cellTitle(date, hour) {
       const cat = CATEGORIES[this.category(date, hour)];
