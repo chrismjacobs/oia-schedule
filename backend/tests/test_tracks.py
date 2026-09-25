@@ -331,6 +331,58 @@ def test_unfilled_sw_hour_counts_as_uncovered(app):
     assert ow_slot.id not in uncovered
 
 
+def test_detail_report_separates_a_miss_from_a_future_shift(app):
+    """Day-by-day detail: hours are spans, and a shift that hasn't happened
+    yet is not a miss.
+
+    "Scheduled minus recorded" is every hour of every upcoming shift, so
+    reporting that as missed would accuse the whole roster of not turning up
+    to work they aren't due at yet.
+    """
+    from app.dashboard.routes import build_month_detail
+    from app.models import AttendanceSession, SessionHour
+    from app.utils.tz import local_now
+
+    month = make_month()
+    db.session.flush()
+    sync_month_slots(month)
+    db.session.commit()
+
+    student = make_student(1, "OW")
+    schedule = Schedule(month_id=month.id, status="committed")
+    db.session.add(schedule)
+    db.session.flush()
+
+    past, future = date(2026, 10, 1), date(2026, 10, 30)
+    for d in (past, future):
+        for hour in (8, 9, 10, 11):
+            slot = Slot.query.filter_by(month_id=month.id, date=d, hour=hour, track="OW").one()
+            db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot.id,
+                                      student_id=student.id, source="solver"))
+    # They turned up for half of the past morning and wrote it up.
+    sess = AttendanceSession(student_id=student.id, date=past, signed_in_at=local_now(),
+                             signed_out_at=local_now(), note="Sorted the post.")
+    db.session.add(sess)
+    db.session.flush()
+    for hour in (8, 9):
+        slot = Slot.query.filter_by(month_id=month.id, date=past, hour=hour, track="OW").one()
+        db.session.add(SessionHour(session_id=sess.id, slot_id=slot.id))
+    db.session.commit()
+
+    days = {d["date"]: d for d in build_month_detail(month)[0]["days"]}
+
+    yesterday = days[past.isoformat()]
+    assert yesterday["status"] == "partial"
+    assert yesterday["scheduled"] == ["8:00-12:00"], "a run reads as one span, not four hours"
+    assert yesterday["recorded"] == ["8:00-10:00"]
+    assert yesterday["missed"] == ["10:00-12:00"]
+    assert yesterday["note"] == "Sorted the post."
+
+    upcoming = days[future.isoformat()]
+    assert upcoming["status"] == "scheduled"
+    assert upcoming["missed"] == [], "a shift still to come is not a no-show"
+
+
 def test_dashboard_names_unclassified_students(app):
     """worker_type decides the lane, so an unset one must be visible rather
     than quietly resolving to the paid lane."""

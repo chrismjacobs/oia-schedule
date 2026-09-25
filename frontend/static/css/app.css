@@ -546,6 +546,38 @@ table.data td.edit-row .field label { color: var(--ink-2); }
 
 footer.app-footer { text-align: center; font-size: 10px; color: var(--ink-3); margin-top: 26px; letter-spacing: .04em; padding: 0 16px; }
 
+/* ---------- Day-by-day detail under the month report ----------
+   A list rather than one long table: the grouping by student is what makes
+   it readable, and it's the same grouping the summary above uses. */
+.drep-student { margin-top: 14px; }
+.drep-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0 4px; border-bottom: 1px solid var(--rule);
+}
+.drep-head strong { font-size: 13px; }
+.drep-head .gap-warn { color: var(--warn); font-weight: 700; }
+table.data.drep { font-size: 11.5px; }
+table.data.drep td { vertical-align: top; padding-top: 5px; padding-bottom: 5px; }
+.drep-what { color: var(--ink-2); line-height: 1.5; }
+.drep-what .warn-text { color: var(--warn); }
+/* The student's own write-up, set apart from the derived facts around it. */
+.drep-note {
+  margin-top: 3px; padding-left: 7px; border-left: 2px solid var(--rule);
+  color: var(--ink-2); white-space: pre-wrap;
+}
+/* Marks a day worked in the unpaid lane, where the hours look identical. */
+.lane-tag {
+  margin-left: 5px; font-size: 9px; font-weight: 700; letter-spacing: .06em;
+  color: var(--ink-3); border: 1px solid var(--rule); border-radius: 3px; padding: 0 3px;
+}
+
+@media (max-width: 640px) {
+  /* Six columns don't fit a phone; let the detail tables scroll on their own
+     rather than pushing the page sideways. */
+  table.data.drep { min-width: 520px; }
+  .drep-student { overflow-x: auto; }
+}
+
 /* ---- Print: the month report only ----
    The close-out report is the one thing anyone prints — it's the hours
    record that goes with the salary and insurance paperwork. Rather than a
@@ -561,4 +593,8 @@ footer.app-footer { text-align: center; font-size: 10px; color: var(--ink-3); ma
      alone has to carry it, so drop the fill and keep the digits black. */
   .closeout .badge { background: none !important; color: #000 !important; }
   .closeout table.data th, .closeout table.data td { border-color: #999; }
+  /* Keep a student's day-records together rather than split across a page
+     break, and let the detail tables print at full width. */
+  .drep-student { break-inside: avoid; overflow: visible; }
+  table.data.drep { min-width: 0; font-size: 10px; }
 }

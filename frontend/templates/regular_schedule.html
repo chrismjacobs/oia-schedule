@@ -99,14 +99,66 @@
         Leave: [[ closeout.leave_patterns.too_often.length ]] student(s) over the frequent-leave threshold,
         [[ closeout.leave_patterns.too_late.length ]] short-notice request(s).
       </p>
+      <!-- Day by day, under the summary. The table above says how many
+           hours; this says which hours and what happened in them, which is
+           the question that arrives the moment a number looks wrong. -->
+      <div class="detail-report" v-if="detail">
+        <h3 style="margin-top:16px;">Day by day 逐日明細</h3>
+        <div class="noprint" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:4px 0 10px;">
+          <label class="inline-check" style="margin:0;">
+            <input type="checkbox" v-model="detailOnlyFlagged"> Only days needing attention
+          </label>
+          <span class="hint">[[ detailDayCount ]] day-record[[ detailDayCount === 1 ? '' : 's' ]] shown.</span>
+        </div>
+
+        <div class="drep-student" v-for="r in detailShown" v-bind:key="r.student_id">
+          <div class="drep-head">
+            <oia-token v-bind:student="r.student" size="sm"></oia-token>
+            <strong>[[ r.student ? (r.student.chinese_name + ' ' + r.student.english_name) : '#' + r.student_id ]]</strong>
+            <span class="hint mono">scheduled [[ r.scheduled_hours ]]h · recorded [[ r.recorded_hours ]]h
+              · <span v-bind:class="r.scheduled_hours - r.recorded_hours > 0 ? 'gap-warn' : ''">gap [[ r.scheduled_hours - r.recorded_hours ]]h</span></span>
+          </div>
+          <table class="data drep">
+            <thead><tr>
+              <th>Date</th><th>Scheduled</th><th>Recorded</th><th>In / out</th>
+              <th>Status</th><th>What happened</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="d in r.days" v-bind:key="d.date">
+                <td class="mono">[[ WEEKDAY_LABELS[d.weekday] ]] [[ d.date.slice(5) ]]</td>
+                <td class="mono">[[ d.scheduled.join(', ') || '—' ]]<span class="lane-tag"
+                    v-if="d.tracks.includes('SW')">SW</span></td>
+                <td class="mono">[[ d.recorded.join(', ') || '—' ]]</td>
+                <td class="mono hint">[[ d.signed_in_at ? d.signed_in_at + '–' + (d.signed_out_at || '?') : '—' ]]</td>
+                <td><span class="badge" v-bind:class="DETAIL_STATUS[d.status][1]">[[ DETAIL_STATUS[d.status][0] ]]</span></td>
+                <td class="drep-what">
+                  <div v-if="d.missed.length" class="warn-text">missed [[ d.missed.join(', ') ]]</div>
+                  <div v-if="d.flag_reason" class="warn-text">flag: [[ d.flag_reason.replace('_', ' ') ]]</div>
+                  <div v-for="(lv, i) in d.leave" v-bind:key="i">
+                    leave ([[ lv.status ]]) [[ lv.hour ]]:00 — [[ lv.reason ]]
+                  </div>
+                  <div v-if="d.tasks.length">tasks: [[ d.tasks.join(', ') ]]</div>
+                  <div v-if="d.note" class="drep-note">[[ d.note ]]</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" v-if="!detailShown.length">Nothing to show with this filter.</p>
+      </div>
+
       <!-- Export row: the report is never stored, so these are the only ways
            a month's numbers leave the database. -->
       <p class="noprint" style="margin-top:10px;">
         <a class="btn secondary" v-bind:href="'/api/admin/months/' + monthId + '/report.csv'">Download CSV</a>
+        <a class="btn secondary" style="margin-left:8px;"
+           v-bind:href="'/api/admin/months/' + monthId + '/report-detail.csv'">Detail CSV</a>
+        <button class="secondary" style="margin-left:8px;" v-on:click="toggleDetail" v-bind:disabled="busy">
+          [[ detail ? 'Hide day-by-day' : 'Show day-by-day 逐日明細' ]]</button>
         <button class="secondary" style="margin-left:8px;" v-on:click="printReport">Print 列印</button>
         <button class="secondary" style="margin-left:8px;" v-on:click="postReportToLine" v-bind:disabled="busy">
           Post to LINE 傳到群組</button>
-        <button class="secondary" style="margin-left:8px;" v-on:click="closeout = null">Dismiss</button>
+        <button class="secondary" style="margin-left:8px;" v-on:click="closeout = null; detail = null">Dismiss</button>
       </p>
       <p class="hint noprint" v-if="reportMessage">[[ reportMessage ]]</p>
     </div>
@@ -280,6 +332,16 @@ const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const WEEKDAYS = [0, 1, 2, 3, 4];
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+// [label, badge class] per day status in the day-by-day report. "Scheduled"
+// is a future shift, not a miss — a month in progress is mostly those.
+const DETAIL_STATUS = {
+  recorded:    ["Worked", "ok"],
+  partial:     ["Part only", "warn"],
+  no_show:     ["No show", "warn"],
+  leave:       ["Leave", "uncovered"],
+  unscheduled: ["Not scheduled", "warn"],
+  scheduled:   ["Upcoming", "uncovered"],
+};
 
 const MONTH_STATES = ["setup", "selection_open", "selection_closed",
                       "review", "committed", "running", "closed"];
@@ -313,6 +375,7 @@ const app = createApp({
       swOpens: "", swCloses: "", genMessage: "",
       window: null, slotCount: null, closeout: null, reportMessage: "",
       lane: "OW", LANE_ORDER: OIA.LANE_ORDER, LANE_LABELS: OIA.LANE_LABELS,
+      detail: null, detailOnlyFlagged: false, DETAIL_STATUS,
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
@@ -343,6 +406,21 @@ const app = createApp({
     // A lane is the worker type, so only that lane's students can be named
     // in it — same rule the server enforces.
     laneStudents() { return this.students.filter(s => OIA.laneOf(s) === this.lane); },
+    // "Needing attention" is every day that isn't a shift worked as planned:
+    // a gap, an unplanned sign-in, leave, or a flag. Filtering to these is
+    // what makes a month of day-records usable.
+    detailShown() {
+      if (!this.detail) return [];
+      if (!this.detailOnlyFlagged) return this.detail;
+      const interesting = d =>
+        d.status !== "recorded" && d.status !== "scheduled" || d.flag_reason || d.leave.length;
+      return this.detail
+        .map(r => Object.assign({}, r, { days: r.days.filter(interesting) }))
+        .filter(r => r.days.length);
+    },
+    detailDayCount() {
+      return this.detailShown.reduce((n, r) => n + r.days.length, 0);
+    },
     weeks() {
       // A day closed after the pattern was copied still has regular_slot
       // rows; leave it out — editing a closed day's hours means nothing.
@@ -552,6 +630,17 @@ const app = createApp({
         this.monthMessage = e.message === "month_exists" ? "That month already exists."
           : e.message === "year_month_required" ? "Enter a month as YYYY-MM."
           : e.message;
+      } finally { this.busy = false; }
+    },
+    // Fetched on demand, not with the report: a month of day-records is a
+    // lot of rows and only wanted when somebody goes looking.
+    async toggleDetail() {
+      if (this.detail) { this.detail = null; return; }
+      this.busy = true;
+      try {
+        this.detail = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/detail");
+      } catch (e) {
+        this.reportMessage = e.message;
       } finally { this.busy = false; }
     },
     async showReport() {

@@ -22,6 +22,157 @@ def _committed_schedule(month_id):
             .order_by(Schedule.generated_at.desc()).first())
 
 
+def _hhmm(ts):
+    return ts.strftime("%H:%M") if ts else None
+
+
+def build_month_detail(month):
+    """Day by day, per student: the hours scheduled, the hours actually
+    recorded, the times signed in and out, the report written, the tasks
+    ticked, and any leave.
+
+    The summary table answers "how many hours". This answers "which hours,
+    and what happened in them" — the question that arrives the moment a
+    number looks wrong, and the one that currently needs three screens and a
+    guess to answer.
+
+    Hours are reported as spans, not as a list of hours: a student signs in
+    once for a whole run (CLAUDE.md #9), so "08:00-12:00" is the unit a human
+    should be told about. Same boundaries as every other message, via
+    utils/runs.
+    """
+    from app.utils.runs import contiguous_runs
+
+    schedule = _committed_schedule(month.id)
+    today = local_today()
+    slots = Slot.query.filter_by(month_id=month.id).all()
+    slot_by_id = {s.id: s for s in slots}
+    if not slots:
+        return []
+
+    students = {s.id: s for s in Student.query.all()}
+
+    # (student, date) -> scheduled slots
+    scheduled = defaultdict(list)
+    if schedule:
+        for a in Assignment.query.filter_by(schedule_id=schedule.id).all():
+            slot = slot_by_id.get(a.slot_id)
+            if slot:
+                scheduled[(a.student_id, slot.date)].append(slot)
+
+    # (student, date) -> recorded slots, and the sessions that recorded them
+    recorded = defaultdict(list)
+    sessions_by_key = defaultdict(list)
+    session_rows = (
+        AttendanceSession.query.join(SessionHour, SessionHour.session_id == AttendanceSession.id)
+        .join(Slot, SessionHour.slot_id == Slot.id)
+        .filter(Slot.month_id == month.id).distinct().all()
+    )
+    for sess in session_rows:
+        sessions_by_key[(sess.student_id, sess.date)].append(sess)
+        for sh in sess.hours:
+            slot = slot_by_id.get(sh.slot_id)
+            if slot:
+                recorded[(sess.student_id, slot.date)].append(slot)
+
+    # A session that recorded nothing in this month still happened — without
+    # this, a sign-in against an hour nobody scheduled would vanish from the
+    # report entirely, which is one of the two things CLAUDE.md #9 asks to be
+    # flagged.
+    for sess in AttendanceSession.query.filter(
+            AttendanceSession.date >= min(s.date for s in slots),
+            AttendanceSession.date <= max(s.date for s in slots)).all():
+        if sess not in sessions_by_key[(sess.student_id, sess.date)]:
+            sessions_by_key[(sess.student_id, sess.date)].append(sess)
+
+    # (student, date) -> leave requests
+    leave = defaultdict(list)
+    for lr in (LeaveRequest.query.join(Slot, LeaveRequest.slot_id == Slot.id)
+               .filter(Slot.month_id == month.id, LeaveRequest.status != "withdrawn").all()):
+        if lr.slot:
+            leave[(lr.student_id, lr.slot.date)].append(lr)
+
+    tasks_by_session = defaultdict(list)
+    for tc in TaskCompletion.query.filter(TaskCompletion.session_id.isnot(None)).all():
+        if tc.regular_task:
+            tasks_by_session[tc.session_id].append(tc.regular_task.title_en or tc.regular_task.title_zh)
+    for ct in CustomTask.query.filter(CustomTask.session_id.isnot(None)).all():
+        tasks_by_session[ct.session_id].append(ct.title_en or ct.title_zh)
+
+    def spans(slot_list):
+        return [
+            f"{run[0].hour}:00-{run[-1].hour + 1}:00"
+            for run in contiguous_runs(slot_list, lambda s: s.hour)
+        ]
+
+    out = []
+    by_student = defaultdict(set)
+    for (sid, d) in set(list(scheduled) + list(recorded) + list(sessions_by_key) + list(leave)):
+        by_student[sid].add(d)
+
+    for student_id, dates in by_student.items():
+        student = students.get(student_id)
+        days = []
+        for d in sorted(dates):
+            sched = scheduled.get((student_id, d), [])
+            rec = recorded.get((student_id, d), [])
+            sessions = sessions_by_key.get((student_id, d), [])
+            lrs = leave.get((student_id, d), [])
+
+            rec_ids = {s.id for s in rec}
+            missed = [s for s in sched if s.id not in rec_ids]
+            if not sched and rec:
+                status = "unscheduled"
+            elif not missed and rec:
+                status = "recorded"
+            elif rec:
+                status = "partial"
+            elif any(lr.status == "approved" for lr in lrs):
+                status = "leave"
+            elif d < today:
+                status = "no_show"
+            else:
+                status = "scheduled"
+
+            notes = [s.note for s in sessions if s.note]
+            task_names = sorted({t for s in sessions for t in tasks_by_session.get(s.id, [])})
+            days.append({
+                "date": d.isoformat(),
+                "weekday": d.weekday(),
+                "status": status,
+                "tracks": sorted({s.track for s in sched} | {s.track for s in rec}),
+                "scheduled": spans(sched),
+                "scheduled_hours": len(sched),
+                "recorded": spans(rec),
+                "recorded_hours": len(rec),
+                # Only hours that were actually missed. On a shift that hasn't
+                # happened yet, every scheduled hour is "not yet recorded",
+                # which is not the same thing and must not read as a failure.
+                "missed": spans(missed) if status in ("no_show", "partial") else [],
+                "signed_in_at": _hhmm(min((s.signed_in_at for s in sessions), default=None)),
+                "signed_out_at": _hhmm(max((s.signed_out_at for s in sessions
+                                            if s.signed_out_at), default=None)),
+                "flag_reason": next((s.flag_reason for s in sessions if s.flagged), None),
+                "note": "\n".join(notes) or None,
+                "tasks": task_names,
+                "leave": [{"status": lr.status, "reason": lr.reason,
+                           "hour": lr.slot.hour if lr.slot else None,
+                           "lead_time_hours": lr.lead_time_hours} for lr in lrs],
+            })
+
+        out.append({
+            "student_id": student_id,
+            "student": student.to_dict() if student else None,
+            "is_demo": bool(student and student.is_demo),
+            "scheduled_hours": sum(x["scheduled_hours"] for x in days),
+            "recorded_hours": sum(x["recorded_hours"] for x in days),
+            "days": days,
+        })
+
+    out.sort(key=lambda r: ((r["student"]["english_name"] or "").lower() if r["student"] else "~"))
+    return out
+
+
 def build_month_dashboard(month):
     schedule = _committed_schedule(month.id)
     today = local_today()
@@ -161,6 +312,19 @@ def build_month_dashboard(month):
 def month_dashboard(month_id):
     month = Month.query.get_or_404(month_id)
     return jsonify(build_month_dashboard(month))
+
+
+@bp.get("/months/<int:month_id>/detail")
+@overseer_required
+def month_detail(month_id):
+    """The day-by-day breakdown behind the summary.
+
+    Its own endpoint rather than part of the report above: it is a lot of
+    rows, and it is only wanted when somebody goes looking, so the dashboard
+    shouldn't pay for it on every load.
+    """
+    month = Month.query.get_or_404(month_id)
+    return jsonify(build_month_detail(month))
 
 
 def _slot_status_rows(slots):

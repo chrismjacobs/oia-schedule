@@ -25,7 +25,7 @@ from app.utils.slot_sync import (
     sync_month_slots, month_has_slots, AvailabilityLossRefused, MAX_LOST_DEFAULT,
 )
 from app.utils.tracks import TRACKS, DEFAULT_TRACK, TRACK_DEFAULT_ON, track_for
-from app.dashboard.routes import build_month_dashboard
+from app.dashboard.routes import build_month_dashboard, build_month_detail
 from app.admin.demo import seed_demo, reset_demo
 from app.notifications.tick import run_tick
 from app.notifications.service import reset_notification, notify_selection_open, notify_month_report
@@ -1046,6 +1046,50 @@ def month_report_csv(month_id):
         mimetype="text/csv",
         headers={"Content-Disposition":
                  f'attachment; filename="oia-hours-{month.year_month}.csv"'},
+    )
+
+
+@bp.get("/months/<int:month_id>/report-detail.csv")
+@overseer_required
+def month_report_detail_csv(month_id):
+    """The day-by-day breakdown as a file: one row per student per day.
+
+    Separate from report.csv because they answer different questions and get
+    used differently — that one is the payroll summary somebody signs off,
+    this one is what you open when a number on it is queried.
+    """
+    month = Month.query.get_or_404(month_id)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Student", "Student ID", "Date", "Weekday", "Lane", "Status",
+                "Scheduled", "Scheduled hours", "Recorded", "Recorded hours",
+                "Missed", "Signed in", "Signed out", "Flag", "Tasks done",
+                "Leave", "Report"])
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for row in build_month_detail(month):
+        if row["is_demo"]:
+            continue
+        s = row["student"] or {}
+        name = " ".join(x for x in (s.get("chinese_name"), s.get("english_name")) if x)
+        for day in row["days"]:
+            leave = "; ".join(
+                f"{lv['status']} {lv['hour']}:00 — {lv['reason']}" for lv in day["leave"])
+            w.writerow([
+                name, s.get("student_id", ""), day["date"], weekdays[day["weekday"]],
+                "/".join(day["tracks"]), day["status"],
+                " ".join(day["scheduled"]), day["scheduled_hours"],
+                " ".join(day["recorded"]), day["recorded_hours"],
+                " ".join(day["missed"]),
+                day["signed_in_at"] or "", day["signed_out_at"] or "",
+                day["flag_reason"] or "", "; ".join(day["tasks"]),
+                leave, (day["note"] or "").replace("\n", " / "),
+            ])
+
+    return Response(
+        buf.getvalue().encode("utf-8-sig"),
+        mimetype="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="oia-detail-{month.year_month}.csv"'},
     )
 
 
