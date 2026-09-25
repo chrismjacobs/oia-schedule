@@ -255,6 +255,43 @@ def test_half_days_keep_runs_intact_across_lanes(app):
     assert 4 in lengths, "a whole offered morning is still a candidate session"
 
 
+def test_solver_ignores_hours_offered_in_the_other_lane(app):
+    """Availability saved before a student's worker type was set points at
+    the other lane's slots.
+
+    That is the live situation on the day lanes ship: everyone's saved hours
+    are against paid slots, and the students about to become unpaid keep
+    theirs. The manual-edit path refuses a cross-lane placement, so the solver
+    has to as well — otherwise the very first draft quietly staffs paid hours
+    with unpaid workers.
+    """
+    from app.schedule.solver import solve_month
+
+    month = make_month()
+    d = date(2026, 10, 5)
+    db.session.flush()
+    sync_month_slots(month)
+    db.session.commit()
+
+    # An unpaid worker holding availability on paid slots, exactly as a
+    # pre-lanes row would look once their worker type is set.
+    sw = make_student(1, "SW")
+    ow_slots = Slot.query.filter_by(month_id=month.id, date=d, track="OW").all()
+    for slot in ow_slots:
+        db.session.add(Availability(student_id=sw.id, slot_id=slot.id))
+    db.session.commit()
+
+    weights = {"coverage": 1000, "floor_guarantee": 500, "short_session": 600,
+               "per_session": 150, "same_day_double": 100, "low_churn": 10,
+               "equalise_hours": 1}
+    rules = {"min_hours": 2, "max_hours": 4, "short_as_last_resort": True,
+             "allow_same_day_double": True}
+    result, _ = solve_month(month.id, weights, floor_hours=4, rules=rules,
+                            time_limit_seconds=10)
+
+    assert result == {}, "an unpaid worker was not given paid hours they only offered by accident"
+
+
 def test_solver_fills_both_lanes_and_never_doubles_a_slot(app):
     from app.schedule.solver import solve_month
 

@@ -40,6 +40,7 @@ greedy round-robin takes over (CLAUDE.md #7: acceptable and explainable).
 """
 from collections import defaultdict
 
+from flask import current_app
 from ortools.sat.python import cp_model
 
 from app.models import Slot, Availability, RegularSlot
@@ -49,12 +50,46 @@ from app.models import Slot, Availability, RegularSlot
 REGULAR_LOCK_FACTOR = 10
 
 
+def _load_tracks(student_ids):
+    """{student_id: track} for the students in play."""
+    from app.models import Student
+    from app.utils.tracks import track_for, DEFAULT_TRACK
+    if not student_ids:
+        return {}
+    rows = Student.query.filter(Student.id.in_(list(student_ids))).all()
+    out = {s.id: track_for(s) for s in rows}
+    return {sid: out.get(sid, DEFAULT_TRACK) for sid in student_ids}
+
+
 def _load_inputs(month_id):
+    """Slots, and what each student offered — in their own lane only.
+
+    The lane filter is not belt-and-braces. Availability rows saved before a
+    student's worker type was set, or before lanes existed at all, point at
+    the other lane's slots; without this the solver would read them as an
+    offer and put an unpaid worker on a paid hour, which is the one thing the
+    lane split exists to prevent. The manual-edit path refuses that, so the
+    solver must too.
+    """
     slots = Slot.query.filter_by(month_id=month_id).order_by(Slot.date, Slot.hour).all()
+    track_by_slot = {s.id: s.track for s in slots}
+
     offered = defaultdict(set)  # student_id -> {slot_id}
-    for a in (Availability.query.join(Slot, Availability.slot_id == Slot.id)
-              .filter(Slot.month_id == month_id).all()):
+    rows = (Availability.query.join(Slot, Availability.slot_id == Slot.id)
+            .filter(Slot.month_id == month_id).all())
+    tracks = _load_tracks({a.student_id for a in rows})
+    crossed = 0
+    for a in rows:
+        if track_by_slot.get(a.slot_id) != tracks.get(a.student_id):
+            crossed += 1
+            continue
         offered[a.student_id].add(a.slot_id)
+    if crossed:
+        # Worth saying out loud: it means somebody's saved hours are being
+        # ignored, and the reason is their worker type, not their choices.
+        current_app.logger.warning(
+            "solver: ignored %d availability row(s) for hours in the other lane "
+            "— those students need to re-pick, or their worker type is wrong", crossed)
     return slots, offered
 
 
@@ -72,17 +107,6 @@ def _load_regular_locks(month_id, slots, offered):
         if r.student_id and slot_id and slot_id in offered.get(r.student_id, ()):
             locked[slot_id] = r.student_id
     return locked
-
-
-def _load_tracks(student_ids):
-    """{student_id: track} for the students in play."""
-    from app.models import Student
-    from app.utils.tracks import track_for, DEFAULT_TRACK
-    if not student_ids:
-        return {}
-    rows = Student.query.filter(Student.id.in_(list(student_ids))).all()
-    out = {s.id: track_for(s) for s in rows}
-    return {sid: out.get(sid, DEFAULT_TRACK) for sid in student_ids}
 
 
 def _half_days(slots):
