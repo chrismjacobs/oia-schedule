@@ -23,7 +23,8 @@
           <thead>
             <tr>
               <th class="h">時 / hr</th>
-              <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+              <th v-for="d in week" v-bind:key="d" v-bind:class="{ 'day-out': isOutOfMonth(d) }"
+                  v-bind:title="isOutOfMonth(d) ? 'Not part of this month 不屬於本月' : null">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
             </tr>
           </thead>
           <tbody>
@@ -31,7 +32,8 @@
               <td class="h mono">[[ hourLabel(h) ]]</td>
               <!-- One sub-cell per lane, so an hour worked by two people
                    shows both and each student can find their own shift. -->
-              <td v-for="d in week" v-bind:key="d+'_'+h" class="reg-cell">
+              <td v-for="d in week" v-bind:key="d+'_'+h" class="reg-cell"
+                  v-bind:class="{ 'day-out': isOutOfMonth(d) }">
                 <span class="lanes">
                   <span v-for="r in laneRows(d, h)" v-bind:key="laneKey(d, h, r)"
                         class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
@@ -78,11 +80,15 @@ const app = createApp({
         (a, b) => OIA.byLane(a.slot.track, b.slot.track)));
       return map;
     },
+    currentYm() {
+      const m = this.months.find(m => m.id === this.monthId);
+      return m ? m.year_month : "";
+    },
+    // Full Mon-Fri weeks, so every week has the same five columns. Days
+    // belonging to the neighbouring month are drawn greyed and blank.
     weeks() {
-      if (!this.payload) return [];
-      const seen = new Set(), dates = [];
-      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
-      return OIA.groupIntoWeeks(dates);
+      if (!this.payload || !this.currentYm) return [];
+      return OIA.monthWeeks(this.currentYm);
     },
   },
   watch: {
@@ -100,6 +106,7 @@ const app = createApp({
     }
   },
   methods: {
+    isOutOfMonth(d) { return this.currentYm && d.slice(0, 7) !== this.currentYm; },
     laneRows(date, hour) {
       const rows = this.rowsByKey[date + "_" + hour];
       return rows && rows.length ? rows : [null];

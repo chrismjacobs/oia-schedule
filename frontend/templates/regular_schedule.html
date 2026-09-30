@@ -294,7 +294,11 @@
               <thead>
                 <tr>
                   <th class="h">時 / hr</th>
-                  <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+                  <th v-for="d in week" v-bind:key="d" v-bind:class="dayHeadClass(d)"
+                      v-bind:title="dayTitle(d)">
+                    [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
+                    <div class="day-tag" v-if="isClosedDay(d)">closed</div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -306,7 +310,7 @@
                     <!-- In the unpaid lane most cells have no row at all,
                          and "none" is a real answer there, so the select is
                          always offered rather than only where a row exists. -->
-                    <select v-if="regularRow(d, h) || lane !== 'OW'"
+                    <select v-if="isEditableDay(d) && (regularRow(d, h) || lane !== 'OW')"
                             v-bind:value="regularCellValue(d, h)"
                             v-on:change="onRegularCellChange(d, h, $event.target.value)">
                       <option value="none" v-if="lane !== 'OW'">none</option>
@@ -421,14 +425,14 @@ const app = createApp({
     detailDayCount() {
       return this.detailShown.reduce((n, r) => n + r.days.length, 0);
     },
+    // Every week of the month as a full Mon-Fri, so the grid keeps the same
+    // five columns. Days from the neighbouring month are drawn greyed and
+    // blank; closed days are shown greyed too, but not editable — editing a
+    // closed day's hours means nothing.
     weeks() {
-      // A day closed after the pattern was copied still has regular_slot
-      // rows; leave it out — editing a closed day's hours means nothing.
-      const closed = new Set(this.closedDates.map(c => c.date));
-      const dates = Array.from(new Set(this.regularSlots.map(r => r.date)))
-        .filter(d => !closed.has(d)).sort();
-      return OIA.groupIntoWeeks(dates);
+      return this.currentMonthYm ? OIA.monthWeeks(this.currentMonthYm) : [];
     },
+    closedDateSet() { return new Set(this.closedDates.map(c => c.date)); },
     currentMonthState() {
       const m = this.months.find(m => m.id === this.monthId);
       return m ? m.state : "";
@@ -527,11 +531,25 @@ const app = createApp({
       if (row.state === "assigned") return "assigned:" + row.student_id;
       return row.state;
     },
+    isOutOfMonth(d) { return this.currentMonthYm && d.slice(0, 7) !== this.currentMonthYm; },
+    isClosedDay(d) { return this.closedDateSet.has(d); },
+    isEditableDay(d) { return !this.isOutOfMonth(d) && !this.isClosedDay(d); },
+    dayHeadClass(d) {
+      return { "day-out": this.isOutOfMonth(d), "reg-unavailable": this.isClosedDay(d) };
+    },
+    dayTitle(d) {
+      if (this.isOutOfMonth(d)) return "Not part of this month";
+      const closed = this.closedDates.find(c => c.date === d);
+      return closed ? "Closed" + (closed.reason ? " — " + closed.reason : "") : null;
+    },
     regularCellClass(d, h) {
+      if (this.isOutOfMonth(d)) return { "day-out": true };
+      if (this.isClosedDay(d)) return { "reg-unavailable": true };
       const row = this.regularRow(d, h);
       return { "reg-unavailable": row && row.state === "unavailable" };
     },
     regularCellStyle(d, h) {
+      if (!this.isEditableDay(d)) return {};
       const row = this.regularRow(d, h);
       if (row && row.state === "assigned" && this.studentById[row.student_id]) {
         return { background: this.studentById[row.student_id].colour + "22" };

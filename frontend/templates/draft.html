@@ -67,7 +67,8 @@
           <thead>
             <tr>
               <th class="h">時 / hr</th>
-              <th v-for="d in week" v-bind:key="d">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
+              <th v-for="d in week" v-bind:key="d" v-bind:class="{ 'day-out': isOutOfMonth(d) }"
+                  v-bind:title="isOutOfMonth(d) ? 'Not part of this month' : null">[[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]</th>
             </tr>
           </thead>
           <tbody>
@@ -76,7 +77,8 @@
               <!-- One select per lane. Each still offers only the students
                    available for that hour, which now also means only the
                    students who work that lane. -->
-              <td v-for="d in week" v-bind:key="d + '_' + h" class="reg-cell">
+              <td v-for="d in week" v-bind:key="d + '_' + h" class="reg-cell"
+                  v-bind:class="{ 'day-out': isOutOfMonth(d) }">
                 <span class="lanes">
                   <span v-for="r in laneRows(d, h)" v-bind:key="r.slot.id"
                         class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
@@ -129,11 +131,16 @@ const app = createApp({
         (a, b) => OIA.byLane(a.slot.track, b.slot.track)));
       return map;
     },
+    currentYm() {
+      const m = this.months.find(m => m.id === this.monthId);
+      return m ? m.year_month : "";
+    },
+    // Every week of the month as a full Mon-Fri, so the grid has the same
+    // five columns throughout. A month starting mid-week borrows the days
+    // before it from the month before; those are drawn greyed and blank.
     weeks() {
-      if (!this.payload) return [];
-      const seen = new Set(), dates = [];
-      this.payload.slots.forEach(r => { if (!seen.has(r.slot.date)) { seen.add(r.slot.date); dates.push(r.slot.date); } });
-      return OIA.groupIntoWeeks(dates);
+      if (!this.payload || !this.currentYm) return [];
+      return OIA.monthWeeks(this.currentYm);
     },
     // From selection opening until the schedule is committed — after that
     // the dashboard's scheduled-vs-recorded is what matters.
@@ -161,6 +168,7 @@ const app = createApp({
     // Only real slots here: unlike the week grid, there is nothing to do in
     // a cell that has no slot behind it, so an empty hour draws nothing.
     laneRows(d, h) { return this.rowsByKey[d + "_" + h] || []; },
+    isOutOfMonth(d) { return this.currentYm && d.slice(0, 7) !== this.currentYm; },
     laneMark(r) { return r.slot.track !== "OW" ? "lane-alt" : null; },
     cellClass(r) {
       if (!r) return {};
