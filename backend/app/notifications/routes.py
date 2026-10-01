@@ -39,8 +39,10 @@ def _verify_line_signature(body: bytes, signature: str) -> bool:
 @bp.post("/line/webhook")
 def line_webhook():
     """LINE calls this on every message/join/etc. Its only real job right now
-    is telling whoever messages the bot their own user/group/room ID, since
+    is telling whoever asks the bot their own user/group/room ID, since
     there's no other way to get one — LINE never exposes it in the app UI.
+    It answers only a text message of exactly `/id`: replying to every event
+    meant the bot posted the group ID each time anyone spoke in the group.
     Copy the ID it replies with into Setup > Notification test send, or into
     LINE_GROUP_ID in .env / Render's env vars."""
     signature = request.headers.get("X-Line-Signature", "")
@@ -50,6 +52,11 @@ def line_webhook():
     payload = request.get_json(silent=True) or {}
     line = LineBackend()
     for event in payload.get("events", []):
+        message = event.get("message") or {}
+        if event.get("type") != "message" or message.get("type") != "text":
+            continue
+        if (message.get("text") or "").strip().lower() != "/id":
+            continue
         reply_token = event.get("replyToken")
         source = event.get("source", {})
         source_type = source.get("type")  # user | group | room
