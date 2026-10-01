@@ -66,6 +66,13 @@
       Sign-in / sign-out LINE notifications <span class="hint">簽到退通知</span>
     </label>
     <p class="hint" style="margin-top:6px;">Fires once per sign-in and once per sign-out. Turn off here if it gets too noisy in the group — everything else (committed schedules, leave, open slots, no-shows) keeps sending regardless.</p>
+
+    <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-weight:normal; margin-top:12px;">
+      <input type="checkbox" v-model="settings.auto_advertise_enabled" style="width:auto;">
+      Offer uncovered hours automatically <span class="hint">自動開放空班</span>
+    </label>
+    <p class="hint" style="margin-top:6px;">Off by default. When on, an uncovered hour inside the lookahead window is opened for first-come-first-served claim and announced to the group. A group push costs one message per member, so leaving this off keeps a month of ordinary gaps from spending the whole LINE allowance. Uncovered hours still show on the dashboard either way, and Advertise on the schedule grid still works when you mean it.</p>
+
     <button style="margin-top:8px;" v-on:click="saveSettings">Save</button>
   </div>
 

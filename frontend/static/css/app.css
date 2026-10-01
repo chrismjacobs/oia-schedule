@@ -608,3 +608,23 @@ table.data.drep td { vertical-align: top; padding-top: 5px; padding-bottom: 5px;
   .drep-student { break-inside: avoid; overflow: visible; }
   table.data.drep { min-width: 0; font-size: 10px; }
 }
+
+/* Manual override tickbox on the Regular tab. Deliberately quiet: it sits
+   next to the grid it affects rather than announcing itself, because it is a
+   per-edit mode and not a mode the page is "in". The amber left edge is the
+   same signal the status lines use for "this reaches live data". */
+.override-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-bg);
+  border-radius: 3px;
+  font-weight: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+.override-toggle input { width: auto; margin-top: 2px; flex: none; }
+.override-toggle .hint { display: block; margin-top: 2px; }

@@ -684,6 +684,102 @@ def _sync_if_built(month):
     return sync_month_slots(month, max_lost=None if _sync_confirmed() else MAX_LOST_DEFAULT)
 
 
+# ---------------- Manual override of a committed roster ----------------
+#
+# A regular-grid edit changes the *plan*; by default it deliberately leaves a
+# committed roster alone, and sync_month_slots keeps any slot a committed
+# assignment hangs off (reporting it under "kept") rather than pulling an hour
+# out from under a live schedule.
+#
+# That safety is right as a default and wrong as the only option: it meant the
+# only way to fix one mis-scheduled cell in a committed month was to reopen the
+# month, edit, and recommit — three month-level state changes, each firing its
+# own group notification, for a change affecting one student. A student sat on
+# the wrong day for five weeks because the grid said unavailable and the roster
+# never heard about it.
+#
+# So `override_committed` on a cell edit says "and apply it to the committed
+# roster too". It is **always silent**: nothing on this path notifies, because
+# these are corrections, not news, and the group's push quota is small enough
+# that routine admin tidying must not spend it. When a change genuinely needs
+# announcing the overseer sends it deliberately from Advanced.
+
+def _override_requested(data):
+    return bool((data or {}).get("override_committed"))
+
+
+def _override_summary(applied, released, claimed):
+    """What the override did to the committed roster, or None when it wasn't
+    asked for. `notified` is in the payload and always false on purpose — the
+    screen should state that nothing was sent, so nobody has to remember."""
+    if not applied:
+        return None
+    return {"applied": True, "released": released, "claimed": claimed, "notified": False}
+
+
+def _committed_schedule(month):
+    return (Schedule.query.filter_by(month_id=month.id, status="committed")
+            .order_by(Schedule.generated_at.desc()).first())
+
+
+def _cell_slot(month, d, hour, track):
+    return Slot.query.filter_by(month_id=month.id, date=d, hour=hour, track=track).first()
+
+
+def _release_committed(month, d, hour, track):
+    """Drop whatever the committed roster has on this cell.
+
+    Called *before* the sync, not after: while a committed assignment still
+    points at the slot, sync keeps the slot rather than removing it, so an
+    hour being taken out of the plan would survive as an orphan.
+    """
+    schedule = _committed_schedule(month)
+    slot = _cell_slot(month, d, hour, track)
+    if schedule is None or slot is None:
+        return []
+    released = []
+    for a in Assignment.query.filter_by(schedule_id=schedule.id, slot_id=slot.id).all():
+        released.append({
+            "date": d.isoformat(), "hour": hour, "track": track,
+            "student": a.student.short_name if a.student else None,
+        })
+        db.session.delete(a)
+    db.session.flush()
+    return released
+
+
+def _claim_committed(month, d, hour, track, student_id):
+    """Put a student on this cell in the committed roster.
+
+    Called *after* the sync, which is what creates the slot when the cell has
+    just joined the plan. Replaces any existing occupant — one student per
+    (date, hour, track) is a hard constraint, so this is a move, not an add.
+
+    Whether the student actually offered the hour is reported rather than
+    enforced: a regular-grid cell is a standing claim (see RegularSlot), and
+    the overseer overriding a committed roster by hand is the one case
+    CLAUDE.md #7's availability-only rule explicitly leaves to them. Showing
+    it means they can see when they are scheduling someone who never offered.
+    """
+    schedule = _committed_schedule(month)
+    slot = _cell_slot(month, d, hour, track)
+    if schedule is None or slot is None or not student_id:
+        return None
+    for a in Assignment.query.filter_by(schedule_id=schedule.id, slot_id=slot.id).all():
+        db.session.delete(a)
+    db.session.flush()
+    db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot.id,
+                              student_id=student_id, source="manual_edit"))
+    db.session.flush()
+    student = Student.query.get(student_id)
+    offered = Availability.query.filter_by(slot_id=slot.id, student_id=student_id).first() is not None
+    return {
+        "date": d.isoformat(), "hour": hour, "track": track,
+        "student": student.short_name if student else None,
+        "offered_the_hour": offered,
+    }
+
+
 # ---------------- Selection window ----------------
 
 @bp.get("/months/<int:month_id>/selection-window")
@@ -906,9 +1002,22 @@ def update_regular_slot(regular_slot_id):
     row.state = state
     row.student_id = student_id
     db.session.flush()
+
+    override = _override_requested(data)
+    released, claimed = [], None
+    if override:
+        # Release first regardless of the new state: becoming unavailable or
+        # unassigned clears the cell, and becoming assigned-to-someone-else is
+        # a move, so the old occupant goes either way.
+        released = _release_committed(row.month, row.date, row.hour, row.track)
+
     sync = _sync_if_built(row.month)
+
+    if override and state == "assigned":
+        claimed = _claim_committed(row.month, row.date, row.hour, row.track, student_id)
     db.session.commit()
-    return jsonify(dict(row.to_dict(), slot_sync=sync))
+    return jsonify(dict(row.to_dict(), slot_sync=sync,
+                        roster_override=_override_summary(override, released, claimed)))
 
 
 @bp.post("/months/<int:month_id>/regular-slots")
@@ -945,9 +1054,19 @@ def create_regular_slot(month_id):
                       state=state, student_id=student_id)
     db.session.add(row)
     db.session.flush()
+
+    override = _override_requested(data)
+    released, claimed = [], None
+    if override:
+        released = _release_committed(month, d, hour, track)
+
     sync = _sync_if_built(month)
+
+    if override and state == "assigned":
+        claimed = _claim_committed(month, d, hour, track, student_id)
     db.session.commit()
-    return jsonify(dict(row.to_dict(), slot_sync=sync)), 201
+    return jsonify(dict(row.to_dict(), slot_sync=sync,
+                        roster_override=_override_summary(override, released, claimed))), 201
 
 
 @bp.delete("/regular-slots/<int:regular_slot_id>")
@@ -958,11 +1077,19 @@ def delete_regular_slot(regular_slot_id):
     marking it unavailable isn't the same thing and isn't enough."""
     row = RegularSlot.query.get_or_404(regular_slot_id)
     month = row.month
+    cell = (row.date, row.hour, row.track)
     db.session.delete(row)
     db.session.flush()
+
+    # ?override_committed=true: a DELETE carries no body, so the flag comes in
+    # on the query string alongside the existing ?confirm=true.
+    override = request.args.get("override_committed") == "true"
+    released = _release_committed(month, *cell) if override else []
+
     sync = _sync_if_built(month)
     db.session.commit()
-    return jsonify({"ok": True, "slot_sync": sync})
+    return jsonify({"ok": True, "slot_sync": sync,
+                    "roster_override": _override_summary(override, released, None)})
 
 
 # ---------------- Selection progress (who has answered for a month) ----------------
@@ -1235,6 +1362,7 @@ def get_settings():
         "solver_floor_hours": get_setting("solver_floor_hours", current_app.config["SOLVER_FLOOR_HOURS"]),
         "timecard_cadence": get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"]),
         "notify_attendance_events": get_setting("notify_attendance_events", True),
+        "auto_advertise_enabled": get_setting("auto_advertise_enabled", False),
         "sign_in_opens_minutes_before": current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"],
         "no_show_grace_minutes": current_app.config["NO_SHOW_GRACE_MINUTES"],
         "closing_warning_hours_before": current_app.config["CLOSING_WARNING_HOURS_BEFORE"],
@@ -1264,4 +1392,6 @@ def put_settings():
         set_setting("timecard_cadence", data["timecard_cadence"])
     if "notify_attendance_events" in data:
         set_setting("notify_attendance_events", bool(data["notify_attendance_events"]))
+    if "auto_advertise_enabled" in data:
+        set_setting("auto_advertise_enabled", bool(data["auto_advertise_enabled"]))
     return get_settings()

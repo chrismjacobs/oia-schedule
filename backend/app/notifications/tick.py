@@ -24,6 +24,7 @@ from app.notifications.service import (
     retry_failed,
 )
 from app.utils.runs import contiguous_runs
+from app.utils.settings import get_auto_advertise_enabled
 from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.utils.tz import local_now
 
@@ -227,6 +228,9 @@ def _auto_advertise_unfilled_slots(now):
     to notice and click Advertise manually. Approved-leave reopens and manual
     advertises both create their own ReopenedSlot immediately, so this only
     ever needs to catch slots that were never touched by either path."""
+    if not get_auto_advertise_enabled():
+        return {"auto_advertised": 0, "auto_advertise_off": True}
+
     lookahead_date = now.date() + timedelta(days=current_app.config["ADVERTISE_LOOKAHEAD_DAYS"])
     month_ids = [m.id for m in Month.query.filter(Month.state.in_(("committed", "running"))).all()]
     if not month_ids:

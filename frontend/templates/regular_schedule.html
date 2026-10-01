@@ -284,7 +284,22 @@
         <button v-bind:disabled="busy" v-on:click="populateMonth(false)">Populate from template</button>
         <span class="hint">[[ populateMessage ]]</span>
       </div>
+
+      <!-- Only offered once there is a committed roster to override: before
+           that, a grid edit already reaches the schedule by itself and the
+           tickbox would just be a second way to do nothing. -->
+      <label v-if="hasCommittedRoster" class="override-toggle">
+        <input type="checkbox" v-model="overrideCommitted">
+        <span>
+          <b>Manual override</b> — apply edits to the committed roster
+          <span class="hint">Changes the live schedule for [[ currentMonthYm ]] without
+          reopening the month. Never notifies anyone.</span>
+        </span>
+      </label>
+
       <sync-note v-if="sync && syncWhere === 'grid'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
+      <override-note v-if="rosterOverride" v-bind:o="rosterOverride"
+                     v-on:dismiss="rosterOverride = null"></override-note>
 
       <template v-if="regularSlots.length">
         <template v-for="(week, wi) in weeks" v-bind:key="wi">
@@ -383,6 +398,10 @@ const app = createApp({
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
+      // Manual override: carry a grid edit through to the committed roster
+      // instead of leaving it as a plan-only change. Off unless deliberately
+      // ticked, and never notifies — see rosterOverride below.
+      overrideCommitted: false, rosterOverride: null,
     };
   },
   computed: {
@@ -406,6 +425,11 @@ const app = createApp({
         if (r.track === this.lane) map[r.date + "_" + r.hour] = r;
       });
       return map;
+    },
+    // A committed roster exists from commit onwards — including running and
+    // closed, since a correction to a past month is still a correction.
+    hasCommittedRoster() {
+      return ["committed", "running", "closed"].includes(this.currentMonthState);
     },
     // A lane is the worker type, so only that lane's students can be named
     // in it — same rule the server enforces.
@@ -564,26 +588,38 @@ const app = createApp({
       // "none" removes the cell from this lane for this month — not the same
       // as unavailable, which in the opt-in lane would say the same thing
       // twice, and in the paid one means something else entirely.
+      // A DELETE carries no body, so the override rides on the query string
+      // next to ?confirm=true.
+      const override = this.overrideCommitted && this.hasCommittedRoster;
+
       if (value === "none") {
         if (!row) return;
         const res = await this.withLossConfirm(confirmed => OIA.api.del(
-          "/api/admin/regular-slots/" + row.id + (confirmed ? "?confirm=true" : "")));
+          "/api/admin/regular-slots/" + row.id
+          + "?" + new URLSearchParams({
+              ...(confirmed ? { confirm: "true" } : {}),
+              ...(override ? { override_committed: "true" } : {}),
+            }).toString()));
         if (res === null) { await this.reloadRegularSlots(); return; }
         this.regularSlots = this.regularSlots.filter(r => r.id !== row.id);
         await this.showSync(res.slot_sync, "grid");
+        this.rosterOverride = res.roster_override || null;
         return;
       }
 
       const updated = await this.withLossConfirm(confirmed => row
         ? OIA.api.patch("/api/admin/regular-slots/" + row.id,
-                        { state, student_id: studentId, confirm: confirmed })
+                        { state, student_id: studentId, confirm: confirmed,
+                          override_committed: override })
         : OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots",
                        { date: d, hour: h, state, track: this.lane,
-                         student_id: studentId, confirm: confirmed }));
+                         student_id: studentId, confirm: confirmed,
+                         override_committed: override }));
       if (updated === null) { await this.reloadRegularSlots(); return; }
       this.regularSlots = this.regularSlots
         .filter(r => r.id !== updated.id).concat([updated]);
       await this.showSync(updated.slot_sync, "grid");
+      this.rosterOverride = updated.roster_override || null;
     },
     // A plan change came back with a slot-sync summary (null when the month
     // has no slots yet, i.e. nothing to sync). Only shown when it did
@@ -821,6 +857,41 @@ app.component("sync-note", {
           <li v-for="k in s.kept" :key="k.date + '_' + k.hour" class="mono" v-text="keptText(k)"></li>
         </ul>
       </div>
+      <button class="secondary" type="button" @click="$emit('dismiss')">Dismiss</button>
+    </div>`,
+});
+
+// What a manual override did to the committed roster. It always says that
+// nothing was sent: the quota is small and the whole point of this path is
+// that a correction is silent, so the screen states it rather than leaving
+// the overseer to wonder whether the group just got a message.
+app.component("override-note", {
+  props: { o: { type: Object, required: true } },
+  emits: ["dismiss"],
+  computed: {
+    lines() {
+      const out = this.o.released.map(
+        r => "removed " + (r.student || "nobody") + " from " + r.date.slice(5) + " " + r.hour + ":00");
+      if (this.o.claimed) {
+        out.push("put " + this.o.claimed.student + " on "
+                 + this.o.claimed.date.slice(5) + " " + this.o.claimed.hour + ":00");
+      }
+      return out;
+    },
+    // Worth saying out loud rather than silently allowing: a standing grid
+    // cell may name someone who never offered that hour this month.
+    notOffered() {
+      return this.o.claimed && !this.o.claimed.offered_the_hour ? this.o.claimed.student : null;
+    },
+  },
+  template: `
+    <div class="statusline is-open" style="margin-top:10px;">
+      <strong v-if="lines.length">Committed roster updated — <span v-text="lines.join('; ')"></span>.</strong>
+      <strong v-else>Committed roster unchanged — nothing was scheduled on that hour.</strong>
+      <span>No message was sent.</span>
+      <span v-if="notOffered">
+        Note: <b v-text="notOffered"></b> didn't offer that hour this month.
+      </span>
       <button class="secondary" type="button" @click="$emit('dismiss')">Dismiss</button>
     </div>`,
 });

@@ -176,9 +176,10 @@ Pluggable — `NOTIFICATION_BACKEND=email` (default) or `line`. Email needs
 `SMTP_HOST`/`SMTP_USER`/`SMTP_PASSWORD`/`NOTIFICATION_TO_EMAIL`. LINE needs
 the Messaging API (not LINE Notify — discontinued March 2025):
 `LINE_TOKEN` (channel access token, used for push), `LINE_CHANNEL` (channel
-ID), `LINE_SECRET` (webhook signature verification — not yet used since there's
-no inbound webhook route), and `LINE_GROUP_ID` once the bot's been added to
-the student group. Until `LINE_GROUP_ID` is set, use **Setup → Notification
+ID), `LINE_SECRET` (webhook signature verification), and `LINE_GROUP_ID` once
+the bot's been added to the student group. To find that ID, send `/id` in the
+group: the webhook (`/api/line/webhook`) replies with it and ignores every
+other message. Until `LINE_GROUP_ID` is set, use **Setup → Notification
 test send** with an explicit target user/group ID to check the wiring.
 If the selected backend isn't configured, the send is logged as an error and
 left unsent (retried each `/tick`) — it is never recorded as delivered.

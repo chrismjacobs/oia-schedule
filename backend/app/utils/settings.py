@@ -45,6 +45,21 @@ def get_timecard_cadence():
     return get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"])
 
 
+def get_auto_advertise_enabled():
+    """Whether /tick offers uncovered hours around on its own.
+
+    Off by default, which is a deliberate reversal. Auto-advertising every
+    uncovered hour inside the lookahead window announces each one to the
+    group, and a group push costs one message per member — so the quietest
+    month of ordinary gaps could spend the whole LINE free-tier allowance on
+    offers nobody asked for. Reopening a shift is rare in practice and the
+    overseer already has Advertise for when they mean it.
+
+    Turning this on restores the old behaviour; uncovered hours are reported
+    on the dashboard either way, so nothing is hidden while it is off."""
+    return get_setting("auto_advertise_enabled", False)
+
+
 def get_attendance_notify_enabled():
     """Sign-in/out LINE notifications — on by default, but every sign-in and
     sign-out fires one, which can add up fast on a busy day. Toggle from
