@@ -179,7 +179,16 @@ the Messaging API (not LINE Notify — discontinued March 2025):
 ID), `LINE_SECRET` (webhook signature verification), and `LINE_GROUP_ID` once
 the bot's been added to the student group. To find that ID, send `/id` in the
 group: the webhook (`/api/line/webhook`) replies with it and ignores every
-other message. Until `LINE_GROUP_ID` is set, use **Setup → Notification
+other message.
+
+Leave requests go privately to the overseer through a second Official Account
+(its own 200/month quota): set `LINE2_CHANNEL`, `LINE2_SECRET`, `LINE2_TOKEN`,
+point its webhook at the same `/line/callback`, add it as a friend and send it
+`/id` for `LINE_ADMIN_USER_ID`. Until `LINE2_TOKEN` and `LINE_ADMIN_USER_ID` are
+both set, leave requests go to the group (no name or reason). **Advanced → LINE
+message quota** shows both accounts' usage.
+
+Until `LINE_GROUP_ID` is set, use **Setup → Notification
 test send** with an explicit target user/group ID to check the wiring.
 If the selected backend isn't configured, the send is logged as an error and
 left unsent (retried each `/tick`) — it is never recorded as delivered.

@@ -118,7 +118,15 @@ class Config:
     LINE_CHANNEL = os.environ.get("LINE_CHANNEL")            # channel ID
     LINE_SECRET = os.environ.get("LINE_SECRET")              # channel secret (webhook signature verification)
     LINE_TOKEN = os.environ.get("LINE_TOKEN")                # channel access token (push messages)
-    LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")          # not yet known — set once the bot is added to the group
+    LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")          # the student group the main bot pushes to
+    # Second Official Account for admin-only alerts (leave requests). Its own
+    # free monthly quota, so admin messages neither spend the group's nor stop
+    # when the group's runs out. Until LINE2_TOKEN and LINE_ADMIN_USER_ID are
+    # both set, leave requests keep going to the group via the main bot.
+    LINE2_CHANNEL = os.environ.get("LINE2_CHANNEL")
+    LINE2_SECRET = os.environ.get("LINE2_SECRET")
+    LINE2_TOKEN = os.environ.get("LINE2_TOKEN")
+    LINE_ADMIN_USER_ID = os.environ.get("LINE_ADMIN_USER_ID")  # send /id to the admin bot to get it
     SMTP_HOST = os.environ.get("SMTP_HOST")
     SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
     SMTP_USER = os.environ.get("SMTP_USER")

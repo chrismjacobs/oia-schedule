@@ -5,7 +5,7 @@ from flask import current_app
 
 from app.extensions import db
 from app.models import NotificationLog
-from app.notifications.backends import get_backend
+from app.notifications.backends import admin_line_ready, get_backend
 from app.utils.runs import contiguous_runs, span_text
 from app.utils.settings import get_attendance_notify_enabled
 from app.utils.tz import local_now
@@ -35,7 +35,7 @@ def notify_once(type_, target, related_type, related_id, message):
         current_app.logger.info("notify RETRY (previous attempt failed) | %s", key)
         row.message = message
 
-    backend = get_backend()
+    backend = get_backend(target)
     # via=<backend> on every line: "which channel did this actually go out
     # on?" is the first question whenever a message doesn't arrive.
     current_app.logger.info("notify SEND via=%s | %s | %r", backend.name, key, message)
@@ -187,9 +187,13 @@ def notify_month_report(month, report_rows):
 
 def notify_leave_requested(leave_requests):
     """Fires the moment a student submits a leave request — before it's
-    approved. Deliberately generic (no name, no reason): it flags the
-    overseer to go review it, and primes students that a slot may open up
-    soon, without exposing anything personal in the shared group.
+    approved, to flag the overseer to go review it.
+
+    Once the admin LINE account is set up (admin_line_ready) it goes there
+    privately, with the student's name and reason, and costs the group's
+    quota nothing. Until then it goes to the group, deliberately generic (no
+    name, no reason) so nothing personal is exposed to everyone. Students
+    still hear when a slot actually opens, via notify_slots_open.
 
     Takes the whole batch from one submission (a single hour is a batch of
     one) and sends exactly one message describing the span. A student asking
@@ -211,6 +215,13 @@ def notify_leave_requested(leave_requests):
     else:
         span = (f"{first.date.isoformat()} {first.hour}:00 to "
                 f"{last.date.isoformat()} {last.hour + 1}:00 ({len(slots)} hours)")
+    if admin_line_ready(current_app.config):
+        first_req = requests[0]
+        return notify_once(
+            "leave_requested", "admin", "leave_request", first_req.id,
+            f"[OIA] Leave request: {first_req.student.display_name()}, {span}.\n"
+            f"Reason: {first_req.reason}",
+        )
     return notify_once(
         "leave_requested", "group", "leave_request", requests[0].id,
         f"[OIA] A leave request came in for {span} — pending review.",

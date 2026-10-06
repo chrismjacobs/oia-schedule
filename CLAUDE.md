@@ -257,14 +257,19 @@ them into one.
 
 ## 12. Notifications
 
-**Event-driven:** committed schedule (on commit); leave requested (on submit — generic,
-no name or reason, so it both flags the overseer to review and primes students that a
-slot may open); slot open (on reopen — manual, approved-leave, or auto_unfilled all
-fire the same way).
+**Event-driven:** committed schedule (on commit); leave requested (on submit — goes
+**privately to the overseer** via a second "admin" LINE Official Account, with name and
+reason; until that account is configured it falls back to the group, generic with no
+name or reason); slot open (on reopen — manual, approved-leave, or auto_unfilled all
+fire the same way). *Leave requests originally went to the group to prime students
+that a slot may open; the overseer decided they don't need to be public — students
+still hear when the slot actually opens — and the group's 200/month quota ran out.*
 **Time-driven** (need §13): selection window opens; closing warning (~24h before
 close); no-show warning (slot start + grace, if scheduled and not signed in).
 
-- **Recipient:** all go to the **student LINE group** for v1 (no-show gently worded).
+- **Recipient:** all go to the **student LINE group** for v1 (no-show gently worded),
+  except leave requests, which go to the overseer (above). The quota is per Official
+  Account, so the admin account's 200/month is separate from the group's.
   Individual DMs need per-student LINE linking — defer.
 - **Channel:** LINE **Messaging API** (LINE Notify was discontinued March 2025 — do
   not use it). Bot added to the group; push to the group ID. **Build notifications

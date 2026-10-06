@@ -47,22 +47,40 @@ class EmailBackend(NotificationBackend):
             server.sendmail(cfg["NOTIFICATION_FROM_EMAIL"], [to_addr], msg.as_string())
 
 
+# Two Official Accounts, each with its own quota: "main" pushes to the student
+# group, "admin" to the overseer alone. Values are (token, secret, default
+# target) config keys.
+LINE_ACCOUNTS = {
+    "main": ("LINE_TOKEN", "LINE_SECRET", "LINE_GROUP_ID"),
+    "admin": ("LINE2_TOKEN", "LINE2_SECRET", "LINE_ADMIN_USER_ID"),
+}
+
+
+def admin_line_ready(config) -> bool:
+    """Whether admin-only alerts can go to the admin account yet."""
+    return bool(config.get("LINE2_TOKEN") and config.get("LINE_ADMIN_USER_ID"))
+
+
 class LineBackend(NotificationBackend):
-    """LINE Messaging API push to the student group (not LINE Notify)."""
-    name = "line"
+    """LINE Messaging API push (not LINE Notify) from one of LINE_ACCOUNTS."""
     PUSH_URL = "https://api.line.me/v2/bot/message/push"
     REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 
+    def __init__(self, account: str = "main"):
+        self.account = account
+        self.name = "line" if account == "main" else f"line-{account}"
+        self.token_key, self.secret_key, self.target_key = LINE_ACCOUNTS[account]
+
     def send(self, message: str, to: str = None):
         cfg = current_app.config
-        token = cfg.get("LINE_TOKEN")
-        target = to or cfg.get("LINE_GROUP_ID")
+        token = cfg.get(self.token_key)
+        target = to or cfg.get(self.target_key)
         if not token or not target:
             # Loud, not info: this silently drops every notification, and the
             # caller marks it sent, so it looks like success forever after.
             current_app.logger.error(
                 "LINE push SKIPPED — %s not configured. Message dropped: %r",
-                "LINE_TOKEN" if not token else "LINE_GROUP_ID", message)
+                self.token_key if not token else self.target_key, message)
             raise RuntimeError("line_not_configured")
 
         started = time.monotonic()
@@ -88,7 +106,7 @@ class LineBackend(NotificationBackend):
     def reply(self, reply_token: str, message: str):
         """Reply API — free (no push quota used), only usable within the
         webhook request/response window via a reply_token."""
-        token = current_app.config.get("LINE_TOKEN")
+        token = current_app.config.get(self.token_key)
         if not token:
             return
         resp = requests.post(
@@ -131,8 +149,13 @@ def automatic_notifications_are_live(config) -> bool:
     return not str(config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite")
 
 
-def get_backend() -> NotificationBackend:
+def get_backend(target: str = "group") -> NotificationBackend:
     """Backend for *automatic* notifications (/tick, commits, leave, no-shows).
+
+    `target` is notification_log's target. "admin" always goes via the admin
+    LINE account, never falling back to the group: an admin message names the
+    student and their reason, so if the admin account is unconfigured the
+    send fails and stays unsent rather than landing in front of everyone.
 
     The overseer's Advanced > test send builds LineBackend/EmailBackend
     directly and is deliberately NOT routed through here, so checking the
@@ -140,6 +163,8 @@ def get_backend() -> NotificationBackend:
     """
     if not automatic_notifications_are_live(current_app.config):
         return DryRunBackend()
+    if target == "admin":
+        return LineBackend("admin")
     backend = current_app.config.get("NOTIFICATION_BACKEND", "email")
     if backend == "line":
         return LineBackend()
@@ -182,13 +207,15 @@ def _line_get(label, path, token):
             "request_id": request_id, ("data" if resp.ok else "error"): body}
 
 
-def line_quota():
-    """This month's push allowance, read straight from LINE (read-only, uses
-    no quota). `limit` is None when LINE reports no cap. A group push costs
-    one message per member, so `group_members` is returned alongside to turn
-    "messages left" into "group posts left"."""
-    token = current_app.config.get("LINE_TOKEN")
-    group = current_app.config.get("LINE_GROUP_ID")
+def line_quota(account: str = "main"):
+    """This month's push allowance for one LINE account, read straight from
+    LINE (read-only, uses no quota). `limit` is None when LINE reports no cap.
+    A group push costs one message per member, so for the main account
+    `group_members` is returned alongside to turn "messages left" into
+    "group posts left"."""
+    token_key, _, _ = LINE_ACCOUNTS[account]
+    token = current_app.config.get(token_key)
+    group = current_app.config.get("LINE_GROUP_ID") if account == "main" else None
     if not token:
         return {"configured": False}
     quota = _line_get("Monthly message quota", "/message/quota", token)

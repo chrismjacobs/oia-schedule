@@ -7,7 +7,9 @@ from flask import jsonify, request, current_app
 from app.notifications import bp
 from app.notifications.tick import run_tick
 from app.models import NotificationLog
-from app.notifications.backends import LineBackend, EmailBackend, line_diagnostics, line_quota
+from app.notifications.backends import (
+    LINE_ACCOUNTS, LineBackend, EmailBackend, line_diagnostics, line_quota,
+)
 from app.utils.decorators import tick_token_required, overseer_required
 
 
@@ -28,12 +30,20 @@ def tick():
     return jsonify(result)
 
 
-def _verify_line_signature(body: bytes, signature: str) -> bool:
-    secret = current_app.config.get("LINE_SECRET")
-    if not secret or not signature:
-        return False
-    expected = base64.b64encode(hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()).decode("utf-8")
-    return hmac.compare_digest(expected, signature)
+def _line_account_for_signature(body: bytes, signature: str):
+    """Which of LINE_ACCOUNTS signed this webhook call, or None. Both accounts
+    point their webhook at the same URL, so the signature is how we tell them
+    apart — and which token to reply with."""
+    if not signature:
+        return None
+    for account, (_, secret_key, _) in LINE_ACCOUNTS.items():
+        secret = current_app.config.get(secret_key)
+        if not secret:
+            continue
+        expected = base64.b64encode(hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()).decode("utf-8")
+        if hmac.compare_digest(expected, signature):
+            return account
+    return None
 
 
 @bp.post("/line/webhook")
@@ -44,13 +54,15 @@ def line_webhook():
     It answers only a text message of exactly `/id`: replying to every event
     meant the bot posted the group ID each time anyone spoke in the group.
     Copy the ID it replies with into Setup > Notification test send, or into
-    LINE_GROUP_ID in .env / Render's env vars."""
+    LINE_GROUP_ID (main bot, in the group) or LINE_ADMIN_USER_ID (admin bot,
+    in a 1:1 chat) in .env / Render's env vars."""
     signature = request.headers.get("X-Line-Signature", "")
-    if not _verify_line_signature(request.get_data(), signature):
+    account = _line_account_for_signature(request.get_data(), signature)
+    if not account:
         return jsonify({"error": "invalid_signature"}), 403
 
     payload = request.get_json(silent=True) or {}
-    line = LineBackend()
+    line = LineBackend(account)
     for event in payload.get("events", []):
         message = event.get("message") or {}
         if event.get("type") != "message" or message.get("type") != "text":
@@ -86,6 +98,8 @@ def test_send():
     try:
         if backend_name == "line":
             LineBackend().send(message, to=target)
+        elif backend_name == "line-admin":
+            LineBackend("admin").send(message, to=target)
         else:
             EmailBackend().send(message)
     except Exception as e:
@@ -97,8 +111,9 @@ def test_send():
 @bp.get("/line-quota")
 @overseer_required
 def line_quota_view():
-    """This month's LINE push usage for the Advanced page's quota panel."""
-    return jsonify(line_quota())
+    """This month's LINE push usage, per account, for the Advanced page's
+    quota panel."""
+    return jsonify({account: line_quota(account) for account in LINE_ACCOUNTS})
 
 
 @bp.get("/notify-diagnostics")

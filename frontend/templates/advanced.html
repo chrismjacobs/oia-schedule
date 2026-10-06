@@ -88,19 +88,22 @@
 
   <div class="panel">
     <h2>LINE message quota 訊息額度</h2>
-    <p class="hint">This month's push allowance, as LINE counts it. A group post costs one message per
-      member of the group. Resets on the 1st.</p>
+    <p class="hint">This month's push allowance, as LINE counts it — each account has its own. A group
+      post costs one message per member of the group. Resets on the 1st.</p>
     <p class="hint" v-if="!quota">Loading…</p>
-    <p class="hint" v-else-if="!quota.configured">LINE_TOKEN is not set, so there's no quota to read.</p>
-    <p class="error-text" v-else-if="quota.error">LINE didn't answer: [[ typeof quota.error === 'string' ? quota.error : JSON.stringify(quota.error) ]]</p>
-    <div v-else style="display:flex; gap:14px; flex-wrap:wrap; margin-top:8px;">
-      <div class="stat"><div class="k">Used</div><div class="v mono">[[ quota.used ]]<small v-if="quota.limit !== null"> / [[ quota.limit ]]</small></div></div>
-      <div class="stat" v-bind:class="{ gap: quotaLow }"><div class="k">Left</div><div class="v mono">[[ quota.limit === null ? 'no cap' : quotaLeft ]]</div></div>
-      <div class="stat" v-if="quota.group_members" v-bind:class="{ gap: quotaLow }">
-        <div class="k">Group posts left</div>
-        <div class="v mono">[[ quota.limit === null ? '—' : Math.floor(quotaLeft / quota.group_members) ]]<small> × [[ quota.group_members ]] members</small></div>
+    <template v-else><template v-for="acc in QUOTA_ACCOUNTS" v-bind:key="acc.key">
+      <h3 style="margin-top:12px;">[[ acc.label ]]</h3>
+      <p class="hint" v-if="!quota[acc.key].configured">[[ acc.token ]] is not set, so there's no quota to read.</p>
+      <p class="error-text" v-else-if="quota[acc.key].error">LINE didn't answer: [[ typeof quota[acc.key].error === 'string' ? quota[acc.key].error : JSON.stringify(quota[acc.key].error) ]]</p>
+      <div v-else style="display:flex; gap:14px; flex-wrap:wrap; margin-top:6px;">
+        <div class="stat"><div class="k">Used</div><div class="v mono">[[ quota[acc.key].used ]]<small v-if="quota[acc.key].limit !== null"> / [[ quota[acc.key].limit ]]</small></div></div>
+        <div class="stat" v-bind:class="{ gap: quotaLow(quota[acc.key]) }"><div class="k">Left</div><div class="v mono">[[ quota[acc.key].limit === null ? 'no cap' : quotaLeft(quota[acc.key]) ]]</div></div>
+        <div class="stat" v-if="quota[acc.key].group_members" v-bind:class="{ gap: quotaLow(quota[acc.key]) }">
+          <div class="k">Group posts left</div>
+          <div class="v mono">[[ quota[acc.key].limit === null ? '—' : Math.floor(quotaLeft(quota[acc.key]) / quota[acc.key].group_members) ]]<small> × [[ quota[acc.key].group_members ]] members</small></div>
+        </div>
       </div>
-    </div>
+    </template></template>
     <button style="margin-top:8px;" v-bind:disabled="busy" v-on:click="loadQuota">Refresh</button>
   </div>
 
@@ -154,11 +157,13 @@
     <div class="field-row">
       <div class="field"><label>Backend</label>
         <select v-model="testBackend">
-          <option value="line">LINE</option>
+          <option value="line">LINE — student group bot</option>
+          <option value="line-admin">LINE — admin bot</option>
           <option value="email">Email</option>
         </select>
       </div>
       <div class="field" v-if="testBackend === 'line'"><label>Target user/group ID (optional — defaults to configured group)</label><input v-model="testTarget"></div>
+      <div class="field" v-if="testBackend === 'line-admin'"><label>Target user ID (optional — defaults to LINE_ADMIN_USER_ID)</label><input v-model="testTarget"></div>
     </div>
     <div class="field"><label>Message</label><textarea v-model="testMessage" rows="2">Test message from OIA Duty Roster.</textarea></div>
     <button v-bind:disabled="busy" v-on:click="sendTest">Send test</button>
@@ -188,6 +193,10 @@ const WEIGHT_HELP = {
   low_churn: ["Consistency (per change)", "Keeping the same weekday/hour from week to week."],
   equalise_hours: ["Equalise hours", "Narrowing the gap between most and least scheduled."],
 };
+const QUOTA_ACCOUNTS = [
+  { key: "main", label: "Student group bot", token: "LINE_TOKEN" },
+  { key: "admin", label: "Admin bot (leave requests)", token: "LINE2_TOKEN" },
+];
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
@@ -198,17 +207,10 @@ const app = createApp({
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
       tickResult: "",
       diag: null, diagError: "",
-      quota: null,
+      quota: null, QUOTA_ACCOUNTS,
     };
   },
   computed: {
-    quotaLeft() { return Math.max(0, this.quota.limit - this.quota.used); },
-    // Amber once fewer than ~5 group posts remain — a single advertised
-    // morning can be four of them.
-    quotaLow() {
-      if (!this.quota || this.quota.limit === null) return false;
-      return this.quotaLeft < 5 * (this.quota.group_members || 1);
-    },
     // Priority order (the JSON arrives alphabetised), then anything unknown.
     weightKeys() {
       const have = Object.keys(this.settings.solver_weights);
@@ -224,8 +226,16 @@ const app = createApp({
       try {
         this.quota = await OIA.api.get("/api/line-quota");
       } catch (e) {
-        this.quota = { configured: true, error: e.message };
+        const failed = { configured: true, error: e.message };
+        this.quota = { main: failed, admin: failed };
       }
+    },
+    quotaLeft(q) { return Math.max(0, q.limit - q.used); },
+    // Amber once fewer than ~5 posts remain — a single advertised morning
+    // to the group can be four of them.
+    quotaLow(q) {
+      if (q.limit === null) return false;
+      return this.quotaLeft(q) < 5 * (q.group_members || 1);
     },
     async loadSemesters() { this.semesters = await OIA.api.get("/api/admin/semesters"); },
     async loadSettings() { this.settings = await OIA.api.get("/api/admin/settings"); },
