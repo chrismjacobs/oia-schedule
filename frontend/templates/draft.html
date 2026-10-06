@@ -83,7 +83,7 @@
                   <span v-for="r in laneRows(d, h)" v-bind:key="r.slot.id"
                         class="lane" v-bind:class="[cellClass(r), laneMark(r)]"
                         v-bind:style="cellStyle(r)"
-                        v-bind:title="r.slot.track !== 'OW' ? 'Unpaid lane (SW/TA)' : null">
+                        v-bind:title="r.slot.track !== 'OW' ? 'Unpaid lane (SW)' : null">
                     <select v-bind:value="r.assignment ? r.assignment.student_id : ''"
                             v-on:change="changeAssignment(r, $event.target.value)">
                       <option value="">[[ stateLabel('unassigned') ]]</option>
@@ -98,7 +98,7 @@
       </div>
     </template>
     <div class="weeknote">colour = the student currently assigned · empty select = uncovered ·
-      a split cell = an hour staffed in both lanes, paid on the left, unpaid (SW/TA) on the right ·
+      a split cell = an hour staffed in both lanes, paid on the left, unpaid (SW) on the right ·
       each select offers only the students who are available and work that lane</div>
   </section>
 </div>

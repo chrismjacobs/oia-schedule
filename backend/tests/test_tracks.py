@@ -45,9 +45,9 @@ def make_month():
 # --------------------------------------------------------------- track_for
 
 @pytest.mark.parametrize("worker_type,expected", [
-    ("OW", "OW"), ("SW", "SW"), ("TA", "SW"), (None, "OW"), ("", "OW"),
+    ("OW", "OW"), ("SW", "SW"), (None, "OW"), ("", "OW"),
 ])
-def test_track_for_maps_ta_into_the_unpaid_lane(app, worker_type, expected):
+def test_track_for_maps_worker_type_to_lane(app, worker_type, expected):
     assert track_for(make_student(1, worker_type)) == expected
 
 

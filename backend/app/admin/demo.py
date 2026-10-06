@@ -29,9 +29,8 @@ from app.utils.settings import get_solver_weights, get_floor_hours
 DEMO_SEMESTER_NAME = "Demo"
 
 # (english_name, chinese_name, colour, shape, student_id, worker_type)
-# The last two work the unpaid lane — one SW, one TA — so the seeded month
-# shows what two workers in one hour actually looks like. TA sits in the same
-# lane as SW (app/utils/tracks.py).
+# The last two work the unpaid lane (SW), so the seeded month shows what two
+# workers in one hour actually looks like.
 DEMO_STUDENTS = [
     ("Wei-Chen", "陳威辰", "#0072B2", "circle",   "90000001", "OW"),
     ("Sandy",    "林思妤", "#E69F00", "triangle", "90000002", "OW"),
@@ -40,7 +39,7 @@ DEMO_STUDENTS = [
     ("Grace",    "李佳穎", "#7E57C2", "circle",   "90000005", "OW"),
     ("Ethan",    "吳承恩", "#0EA5A5", "triangle", "90000006", "OW"),
     ("Mei",      "周美玲", "#C2185B", "square",   "90000007", "SW"),
-    ("Hao",      "劉浩然", "#8D6E63", "diamond",  "90000008", "TA"),
+    ("Hao",      "劉浩然", "#8D6E63", "diamond",  "90000008", "SW"),
 ]
 
 # The unpaid lane, mirroring the real office: a service worker on the delivery

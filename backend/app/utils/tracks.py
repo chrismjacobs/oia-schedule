@@ -15,7 +15,7 @@ somebody has to remember to count.
 # Keys stored in slot.track / regular_slot.track / regular_slot_template.track.
 TRACKS = {
     "OW": "Official Worker (paid)",
-    "SW": "Service Worker / TA (unpaid)",
+    "SW": "Service Worker (unpaid)",
 }
 
 DEFAULT_TRACK = "OW"
@@ -32,14 +32,10 @@ TRACK_DEFAULT_ON = {"OW": True, "SW": False}
 def track_for(student):
     """Which lane a student works in.
 
-    TA sits in the unpaid lane alongside SW — kept in one function so that
-    promoting TA to a lane of its own later is a one-line change here, not a
-    migration.
-
     worker_type is nullable and existing students start as "not set"; those
     default to the paid lane, and the dashboard flags anyone unclassified so
     the default can't quietly become the answer.
     """
     if student is None:
         return DEFAULT_TRACK
-    return "SW" if student.worker_type in ("SW", "TA") else "OW"
+    return "SW" if student.worker_type == "SW" else "OW"

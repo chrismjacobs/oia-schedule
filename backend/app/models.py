@@ -43,7 +43,6 @@ def normalize_username(raw):
 WORKER_TYPES = {
     "OW": "Official Worker",
     "SW": "Service Worker",
-    "TA": "Teaching Assistant",
 }
 
 # Where the student's pay comes from, as the university's insurance portal
@@ -110,7 +109,7 @@ class Student(db.Model):
     # the team schedule and roster views, and this is nobody's business but the
     # overseer's. Served only by the overseer-gated /api/admin/students.
     insurance_number = db.Column(db.String(32), nullable=True)
-    worker_type = db.Column(db.String(2), nullable=True)  # a WORKER_TYPES key: OW | SW | TA
+    worker_type = db.Column(db.String(2), nullable=True)  # a WORKER_TYPES key: OW | SW
     # Both fed to the insurance portal alongside insurance_number, and
     # overseer-only for the same reason: kept out of to_dict().
     project_name = db.Column(db.String(PROJECT_NAME_MAX), nullable=True)

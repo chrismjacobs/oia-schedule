@@ -225,13 +225,13 @@
     return i === -1 ? LANE_ORDER.length : i;
   }
   function byLane(a, b) { return laneRank(a) - laneRank(b); }
-  // Mirrors track_for() in app/utils/tracks.py — TA works the unpaid lane,
-  // and a student nobody has classified yet falls back to the paid one.
+  // Mirrors track_for() in app/utils/tracks.py — a student nobody has
+  // classified yet falls back to the paid lane.
   function laneOf(student) {
     if (!student) return "OW";
-    return (student.worker_type === "SW" || student.worker_type === "TA") ? "SW" : "OW";
+    return student.worker_type === "SW" ? "SW" : "OW";
   }
-  const LANE_LABELS = { OW: "Paid (OW)", SW: "Unpaid (SW/TA)" };
+  const LANE_LABELS = { OW: "Paid (OW)", SW: "Unpaid (SW)" };
 
   window.OIA = {
     api, bilingual, shapeSVG, weekdayLabel, registerGlobals, flagLabel,

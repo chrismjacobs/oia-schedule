@@ -182,6 +182,30 @@ def _line_get(label, path, token):
             "request_id": request_id, ("data" if resp.ok else "error"): body}
 
 
+def line_quota():
+    """This month's push allowance, read straight from LINE (read-only, uses
+    no quota). `limit` is None when LINE reports no cap. A group push costs
+    one message per member, so `group_members` is returned alongside to turn
+    "messages left" into "group posts left"."""
+    token = current_app.config.get("LINE_TOKEN")
+    group = current_app.config.get("LINE_GROUP_ID")
+    if not token:
+        return {"configured": False}
+    quota = _line_get("Monthly message quota", "/message/quota", token)
+    used = _line_get("Messages used this month", "/message/quota/consumption", token)
+    errors = [c["error"] for c in (quota, used) if not c["ok"]]
+    if errors:
+        return {"configured": True, "error": errors[0]}
+    limit = quota["data"].get("value") if quota["data"].get("type") == "limited" else None
+    members = None
+    if group:
+        count = _line_get("Group member count", f"/group/{group}/members/count", token)
+        if count["ok"]:
+            members = count["data"].get("count")
+    return {"configured": True, "limit": limit, "used": used["data"].get("totalUsage", 0),
+            "group_members": members}
+
+
 def line_diagnostics():
     """Ask LINE's side what it knows, since its console has no per-message
     log for pushes. Read-only: sends nothing and uses no quota.

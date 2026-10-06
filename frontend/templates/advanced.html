@@ -87,6 +87,24 @@
   </div>
 
   <div class="panel">
+    <h2>LINE message quota 訊息額度</h2>
+    <p class="hint">This month's push allowance, as LINE counts it. A group post costs one message per
+      member of the group. Resets on the 1st.</p>
+    <p class="hint" v-if="!quota">Loading…</p>
+    <p class="hint" v-else-if="!quota.configured">LINE_TOKEN is not set, so there's no quota to read.</p>
+    <p class="error-text" v-else-if="quota.error">LINE didn't answer: [[ typeof quota.error === 'string' ? quota.error : JSON.stringify(quota.error) ]]</p>
+    <div v-else style="display:flex; gap:14px; flex-wrap:wrap; margin-top:8px;">
+      <div class="stat"><div class="k">Used</div><div class="v mono">[[ quota.used ]]<small v-if="quota.limit !== null"> / [[ quota.limit ]]</small></div></div>
+      <div class="stat" v-bind:class="{ gap: quotaLow }"><div class="k">Left</div><div class="v mono">[[ quota.limit === null ? 'no cap' : quotaLeft ]]</div></div>
+      <div class="stat" v-if="quota.group_members" v-bind:class="{ gap: quotaLow }">
+        <div class="k">Group posts left</div>
+        <div class="v mono">[[ quota.limit === null ? '—' : Math.floor(quotaLeft / quota.group_members) ]]<small> × [[ quota.group_members ]] members</small></div>
+      </div>
+    </div>
+    <button style="margin-top:8px;" v-bind:disabled="busy" v-on:click="loadQuota">Refresh</button>
+  </div>
+
+  <div class="panel">
     <h2>Notification diagnostics 通知診斷</h2>
     <p class="hint">Why didn't a message arrive? Shows which channel automatic notifications really use,
       asks LINE what it has received (read-only — sends nothing, uses no quota), and lists the latest
@@ -180,9 +198,17 @@ const app = createApp({
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
       tickResult: "",
       diag: null, diagError: "",
+      quota: null,
     };
   },
   computed: {
+    quotaLeft() { return Math.max(0, this.quota.limit - this.quota.used); },
+    // Amber once fewer than ~5 group posts remain — a single advertised
+    // morning can be four of them.
+    quotaLow() {
+      if (!this.quota || this.quota.limit === null) return false;
+      return this.quotaLeft < 5 * (this.quota.group_members || 1);
+    },
     // Priority order (the JSON arrives alphabetised), then anything unknown.
     weightKeys() {
       const have = Object.keys(this.settings.solver_weights);
@@ -191,9 +217,16 @@ const app = createApp({
     },
   },
   async mounted() {
-    await Promise.all([this.loadSemesters(), this.loadSettings()]);
+    await Promise.all([this.loadSemesters(), this.loadSettings(), this.loadQuota()]);
   },
   methods: {
+    async loadQuota() {
+      try {
+        this.quota = await OIA.api.get("/api/line-quota");
+      } catch (e) {
+        this.quota = { configured: true, error: e.message };
+      }
+    },
     async loadSemesters() { this.semesters = await OIA.api.get("/api/admin/semesters"); },
     async loadSettings() { this.settings = await OIA.api.get("/api/admin/settings"); },
     async createSemester() {

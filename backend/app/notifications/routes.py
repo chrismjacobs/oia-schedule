@@ -7,7 +7,7 @@ from flask import jsonify, request, current_app
 from app.notifications import bp
 from app.notifications.tick import run_tick
 from app.models import NotificationLog
-from app.notifications.backends import LineBackend, EmailBackend, line_diagnostics
+from app.notifications.backends import LineBackend, EmailBackend, line_diagnostics, line_quota
 from app.utils.decorators import tick_token_required, overseer_required
 
 
@@ -92,6 +92,13 @@ def test_send():
         return jsonify({"error": "send_failed", "message": str(e)}), 502
 
     return jsonify({"ok": True, "backend": backend_name})
+
+
+@bp.get("/line-quota")
+@overseer_required
+def line_quota_view():
+    """This month's LINE push usage for the Advanced page's quota panel."""
+    return jsonify(line_quota())
 
 
 @bp.get("/notify-diagnostics")

@@ -52,7 +52,7 @@ Roster period — the student list changes each semester.
 | colour | text | hex from the managed 8-colour palette (CLAUDE §15) |
 | shape | enum | circle / triangle / square / diamond |
 | insurance_number | varchar(32) null | 勞保 number; overseer-only, never sent to students |
-| worker_type | enum null | OW (Official Worker) / SW (Service Worker) / TA (Teaching Assistant); set by the overseer, null until set |
+| worker_type | enum null | OW (Official Worker) / SW (Service Worker); set by the overseer, null until set |
 | project_name | varchar(128) null | 計畫名稱 for the insurance portal; free text, overseer-only, null until set |
 | funding_category | varchar(1) null | 經費來源; stores the insurance portal's own `ddlJobCategory` option value, "0".."6" ("0" = College is a real choice, not "unset"); overseer-only, null until set |
 | line_user_id | text null | optional; only if individual DMs are enabled later |
@@ -182,7 +182,7 @@ The two lanes have **opposite generation defaults** (`app/utils/tracks.py`):
   row means staff it" applied to a second lane would double every hour in the
   month, so absence is meaningful here and deleting a cell is a real action.
 
-A student's lane is their `worker_type` (TA maps to SW), and it is strict:
+A student's lane is their `worker_type`, and it is strict:
 they only ever see, offer, and can be assigned their own lane's slots.
 
 ---
