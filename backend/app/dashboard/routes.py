@@ -14,6 +14,7 @@ from app.models import (
 )
 from app.utils.decorators import overseer_required
 from app.utils.periods import weekdays_in_month
+from app.utils.settings import get_timing
 from app.utils.tz import local_now, local_today
 
 
@@ -365,7 +366,7 @@ def _slot_status_rows(slots):
             tasks_by_session.setdefault(ct.session_id, {"regular": [], "custom": []})["custom"].append(
                 ct.to_dict())
 
-    grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
+    grace = timedelta(minutes=get_timing("no_show_grace_minutes"))
     now = local_now()
 
     open_reopens = {

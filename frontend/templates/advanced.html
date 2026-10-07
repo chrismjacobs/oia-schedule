@@ -61,11 +61,31 @@
 
   <div class="panel" v-if="settings">
     <h2>Notification preferences 通知偏好</h2>
-    <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-weight:normal;">
-      <input type="checkbox" v-model="settings.notify_attendance_events" style="width:auto;">
-      Sign-in / sign-out LINE notifications <span class="hint">簽到退通知</span>
-    </label>
-    <p class="hint" style="margin-top:6px;">Off by default. Fires once per sign-in and once per sign-out — two group posts per shift, a lot of the monthly LINE allowance. Reminders for a missed sign-in or sign-out keep sending regardless, as do committed schedules and open slots.</p>
+    <h3 style="margin-top:6px;">Attendance messages 簽到退通知</h3>
+    <p class="hint">Where each one goes. A group post costs one message per member; the admin bot costs
+      one and has its own monthly allowance. Missed sign-in and sign-out sent to the group move to the
+      admin bot automatically if the group bot runs out for the month.</p>
+    <p class="statusline is-shut" v-if="!settings.admin_line_ready" style="margin-top:8px;">
+      The admin bot isn't set up yet (LINE2_TOKEN and the admin user ID), so anything set to Admin goes to the group for now.</p>
+    <div class="field-row" style="margin-top:8px;">
+      <div class="field" v-for="m in ATTENDANCE_MESSAGES" v-bind:key="m.key">
+        <label>[[ m.label ]]</label>
+        <select v-model="settings.notification_routes[m.key]">
+          <option value="group">Group</option>
+          <option value="admin">Admin only</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+    </div>
+
+    <h3 style="margin-top:14px;">Timings 時間</h3>
+    <div class="field-row" style="margin-top:8px;">
+      <div class="field"><label>Missed sign-in: minutes after the shift starts</label>
+        <input type="number" min="0" max="480" class="mono" v-model.number="settings.no_show_grace_minutes"></div>
+      <div class="field"><label>Missed sign-out: minutes after the shift ends</label>
+        <input type="number" min="0" max="480" class="mono" v-model.number="settings.forgot_signout_minutes_after_end"></div>
+    </div>
+    <p class="hint">The missed sign-in time also decides when the dashboard starts showing a shift as a no-show.</p>
 
     <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-weight:normal; margin-top:12px;">
       <input type="checkbox" v-model="settings.auto_advertise_enabled" style="width:auto;">
@@ -74,6 +94,7 @@
     <p class="hint" style="margin-top:6px;">Off by default. When on, an uncovered hour inside the lookahead window is opened for first-come-first-served claim and announced to the group. A group push costs one message per member, so leaving this off keeps a month of ordinary gaps from spending the whole LINE allowance. Uncovered hours still show on the dashboard either way, and Advertise on the schedule grid still works when you mean it.</p>
 
     <button style="margin-top:8px;" v-on:click="saveSettings">Save</button>
+    <span class="hint" style="margin-left:8px;">[[ settingsMessage ]]</span>
   </div>
 
   <div class="panel">
@@ -197,6 +218,12 @@ const QUOTA_ACCOUNTS = [
   { key: "main", label: "Student group bot", token: "LINE_TOKEN" },
   { key: "admin", label: "Admin bot (leave requests)", token: "LINE2_TOKEN" },
 ];
+const ATTENDANCE_MESSAGES = [
+  { key: "signed_in", label: "Signed in" },
+  { key: "signed_out", label: "Signed out" },
+  { key: "no_show", label: "Missed sign-in" },
+  { key: "forgot_sign_out", label: "Missed sign-out" },
+];
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
@@ -207,7 +234,7 @@ const app = createApp({
       testBackend: "line", testTarget: "", testMessage: "Test message from OIA Duty Roster.", testMessage2: "",
       tickResult: "",
       diag: null, diagError: "",
-      quota: null, QUOTA_ACCOUNTS,
+      quota: null, QUOTA_ACCOUNTS, ATTENDANCE_MESSAGES,
     };
   },
   computed: {

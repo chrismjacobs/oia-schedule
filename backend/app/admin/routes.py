@@ -22,8 +22,10 @@ from app.utils.decorators import overseer_required
 from app.utils.identity import assign_token
 from app.utils.tz import local_now
 from app.utils.settings import (
-    get_setting, set_setting, get_solver_weights, get_session_rules, get_attendance_notify_enabled,
+    get_setting, set_setting, get_solver_weights, get_session_rules,
+    get_notification_routes, get_timing, ATTENDANCE_MESSAGES, ROUTE_CHOICES, TIMING_KEYS,
 )
+from app.notifications.backends import admin_line_ready
 from app.utils.periods import weekdays_in_month
 from app.utils.slot_sync import (
     sync_month_slots, month_has_slots, AvailabilityLossRefused, MAX_LOST_DEFAULT,
@@ -1363,10 +1365,12 @@ def get_settings():
         "solver_session_rules": get_session_rules(),
         "solver_floor_hours": get_setting("solver_floor_hours", current_app.config["SOLVER_FLOOR_HOURS"]),
         "timecard_cadence": get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"]),
-        "notify_attendance_events": get_attendance_notify_enabled(),
+        "notification_routes": get_notification_routes(),
+        "admin_line_ready": admin_line_ready(current_app.config),
         "auto_advertise_enabled": get_setting("auto_advertise_enabled", False),
         "sign_in_opens_minutes_before": current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"],
-        "no_show_grace_minutes": current_app.config["NO_SHOW_GRACE_MINUTES"],
+        "no_show_grace_minutes": get_timing("no_show_grace_minutes"),
+        "forgot_signout_minutes_after_end": get_timing("forgot_signout_minutes_after_end"),
         "closing_warning_hours_before": current_app.config["CLOSING_WARNING_HOURS_BEFORE"],
     })
 
@@ -1392,8 +1396,22 @@ def put_settings():
         set_setting("solver_floor_hours", int(data["solver_floor_hours"]))
     if "timecard_cadence" in data:
         set_setting("timecard_cadence", data["timecard_cadence"])
-    if "notify_attendance_events" in data:
-        set_setting("notify_attendance_events", bool(data["notify_attendance_events"]))
+    if "notification_routes" in data:
+        routes = data["notification_routes"] or {}
+        if any(routes.get(k) not in ROUTE_CHOICES for k in ATTENDANCE_MESSAGES):
+            return jsonify({"error": "invalid_notification_routes",
+                            "message": "Each message goes to the group, the admin, or off."}), 400
+        set_setting("notification_routes", {k: routes[k] for k in ATTENDANCE_MESSAGES})
+    for key in TIMING_KEYS:
+        if key in data:
+            try:
+                minutes = int(data[key])
+            except (TypeError, ValueError):
+                minutes = -1
+            if not 0 <= minutes <= 480:
+                return jsonify({"error": "invalid_timing",
+                                "message": "Timings are whole minutes, 0 to 480."}), 400
+            set_setting(key, minutes)
     if "auto_advertise_enabled" in data:
         set_setting("auto_advertise_enabled", bool(data["auto_advertise_enabled"]))
     return get_settings()

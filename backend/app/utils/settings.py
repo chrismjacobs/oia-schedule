@@ -60,9 +60,31 @@ def get_auto_advertise_enabled():
     return get_setting("auto_advertise_enabled", False)
 
 
-def get_attendance_notify_enabled():
-    """Sign-in/out LINE notifications — off by default: every sign-in and
-    sign-out is a group push, two per shift, which the free 200/month quota
-    can't carry. Missed sign-ins and sign-outs are reminded regardless. Tick
-    it on from Advanced if wanted (CLAUDE.md #12)."""
-    return get_setting("notify_attendance_events", False)
+# Where each attendance message goes, set per message from Advanced:
+# "group" (the student group bot), "admin" (the admin bot, to the overseer
+# alone) or "off". Sign-in/out are off by default — two group pushes a shift
+# is more than the free 200/month quota can carry.
+ATTENDANCE_MESSAGES = ("signed_in", "signed_out", "no_show", "forgot_sign_out")
+ROUTE_CHOICES = ("group", "admin", "off")
+
+
+def get_notification_routes():
+    # notify_attendance_events was the single on/off tick box for sign-in/out
+    # that this replaced; a saved value still sets their starting point.
+    legacy = "group" if get_setting("notify_attendance_events", False) else "off"
+    defaults = {"signed_in": legacy, "signed_out": legacy,
+                "no_show": "group", "forgot_sign_out": "group"}
+    saved = get_setting("notification_routes") or {}
+    return {k: saved[k] if saved.get(k) in ROUTE_CHOICES else v for k, v in defaults.items()}
+
+
+# Attendance timings in minutes, editable from Advanced. Config only supplies
+# the defaults.
+TIMING_KEYS = {
+    "no_show_grace_minutes": "NO_SHOW_GRACE_MINUTES",
+    "forgot_signout_minutes_after_end": "FORGOT_SIGNOUT_MINUTES_AFTER_END",
+}
+
+
+def get_timing(key):
+    return int(get_setting(key, current_app.config[TIMING_KEYS[key]]))

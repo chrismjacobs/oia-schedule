@@ -24,7 +24,7 @@ from app.notifications.service import (
     notify_forgot_sign_out, retry_failed,
 )
 from app.utils.runs import contiguous_runs
-from app.utils.settings import get_auto_advertise_enabled
+from app.utils.settings import get_auto_advertise_enabled, get_timing
 from app.utils.slot_sync import sync_month_slots, month_has_slots
 from app.utils.tz import local_now
 
@@ -142,7 +142,7 @@ def _signed_in_for(assignment):
 
 def _check_no_shows(now):
     """Scheduled but not signed in, past slot start + grace (CLAUDE.md #8, #11)."""
-    grace = timedelta(minutes=current_app.config["NO_SHOW_GRACE_MINUTES"])
+    grace = timedelta(minutes=get_timing("no_show_grace_minutes"))
     lookback_date = (now - timedelta(days=2)).date()
 
     running_month_ids = [m.id for m in Month.query.filter_by(state="running").all()]
@@ -210,7 +210,7 @@ def _flag_forgotten_signouts(now):
     the admin bot when the group's quota is spent (OVERFLOW_TO_ADMIN)."""
     from app.attendance.routes import _run_for_session, _todays_assignments
 
-    grace = timedelta(minutes=current_app.config["FORGOT_SIGNOUT_MINUTES_AFTER_END"])
+    grace = timedelta(minutes=get_timing("forgot_signout_minutes_after_end"))
     open_sessions = AttendanceSession.query.filter(
         AttendanceSession.signed_out_at.is_(None),
         # Nothing can be due before the shortest possible run has ended.

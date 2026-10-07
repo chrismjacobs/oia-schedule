@@ -113,3 +113,73 @@ def test_no_overflow_until_the_admin_bot_is_configured(app):
     with _send_via_backend(sent):
         assert not notify_once("no_show", "group", "slot", 1, "[OIA] Reminder")
     assert sent == []
+
+
+# ------------------------------------------------ routing and timings (Advanced)
+
+def _route(**routes):
+    from app.utils.settings import set_setting
+    base = {"signed_in": "off", "signed_out": "off", "no_show": "group", "forgot_sign_out": "group"}
+    base.update(routes)
+    set_setting("notification_routes", base)
+
+
+def test_forgot_sign_out_uses_the_timing_set_on_advanced(app):
+    from app.notifications.tick import _flag_forgotten_signouts
+    from app.utils.settings import set_setting
+    _morning_session()
+    set_setting("forgot_signout_minutes_after_end", 15)
+    assert _flag_forgotten_signouts(datetime(2026, 10, 7, 12, 14)) == {"forgot_signout_flagged": 0}
+    assert _flag_forgotten_signouts(datetime(2026, 10, 7, 12, 15)) == {"forgot_signout_flagged": 1}
+
+
+def test_message_routed_off_is_not_replayed_when_switched_back_on(app):
+    from app.notifications.tick import _flag_forgotten_signouts
+    sess = _morning_session()
+    _route(forgot_sign_out="off")
+    _flag_forgotten_signouts(datetime(2026, 10, 7, 13, 0))
+    assert NotificationLog.query.one().target == "off"
+
+    from app.notifications.service import notify_forgot_sign_out
+    _route(forgot_sign_out="group")
+    assert not notify_forgot_sign_out(sess, [])
+    assert NotificationLog.query.count() == 1
+
+
+def test_admin_route_files_under_admin_and_falls_back_to_group(app):
+    from app.notifications.service import notify_signed_in
+    sess = _morning_session()
+    _route(signed_in="admin")
+    app.config.update(LINE2_TOKEN="t2", LINE_ADMIN_USER_ID="Uadmin")
+    notify_signed_in(sess)
+    assert NotificationLog.query.one().target == "admin"
+
+    db.session.query(NotificationLog).delete()
+    app.config.update(LINE2_TOKEN=None)
+    notify_signed_in(sess)
+    assert NotificationLog.query.one().target == "group"
+
+
+def test_signed_in_and_out_are_off_by_default(app):
+    from app.notifications.service import notify_signed_in
+    sess = _morning_session()
+    assert not notify_signed_in(sess)
+    assert NotificationLog.query.one().target == "off"
+
+
+def test_settings_api_saves_routes_and_timings(app):
+    from tests.test_tracks import _as_overseer
+    client = _as_overseer(app)
+    routes = {"signed_in": "group", "signed_out": "off", "no_show": "admin", "forgot_sign_out": "group"}
+    res = client.put("/api/admin/settings", json={
+        "notification_routes": routes, "no_show_grace_minutes": 20,
+        "forgot_signout_minutes_after_end": 45})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["notification_routes"] == routes
+    assert body["no_show_grace_minutes"] == 20
+    assert body["forgot_signout_minutes_after_end"] == 45
+
+    bad = client.put("/api/admin/settings", json={"notification_routes": dict(routes, no_show="everyone")})
+    assert bad.status_code == 400
+    assert client.put("/api/admin/settings", json={"no_show_grace_minutes": -5}).status_code == 400

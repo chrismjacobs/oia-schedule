@@ -8,7 +8,7 @@ from app.extensions import db
 from app.models import NotificationLog
 from app.notifications.backends import admin_line_ready, get_backend
 from app.utils.runs import contiguous_runs, span_text
-from app.utils.settings import get_attendance_notify_enabled
+from app.utils.settings import get_notification_routes
 from app.utils.tz import local_now
 
 
@@ -298,28 +298,53 @@ def notify_closing_warning(month):
     )
 
 
-def notify_signed_in(session):
-    """Toggle-gated (Advanced > sign-in/out notifications) since this can
-    fire a lot on a busy day — every sign-in, not just once."""
-    if not get_attendance_notify_enabled():
-        # Said out loud: this is one of the two ways a notification vanishes
+def _send_attendance(type_, related_type, related_id, message):
+    """Send one attendance message wherever Advanced > Notification
+    preferences routes it: the group, the admin bot, or nowhere. Returns
+    (sent, target) — target being the notification_log key it was filed under.
+
+    Any existing row for this event, under any target, means it was already
+    handled — sent, covered or deliberately withheld. Without that, switching
+    a message from off to on (or group to admin) would re-announce every
+    no-show still inside /tick's lookback.
+    """
+    existing = NotificationLog.query.filter_by(
+        type=type_, related_type=related_type, related_id=related_id).first()
+    if existing and existing.sent_flag:
+        return False, existing.target
+    if existing:
+        # A failed attempt waiting on retry keeps its destination, or a route
+        # change in between would leave two rows and send it twice.
+        return notify_once(type_, existing.target, related_type, related_id, message), existing.target
+
+    target = get_notification_routes()[type_]
+    if target == "admin" and not admin_line_ready(current_app.config):
+        # Not private, so a reminder in front of the group beats none at all.
+        current_app.logger.warning(
+            "notify ROUTE admin bot not configured, using group | %s %s:%s",
+            type_, related_type, related_id)
+        target = "group"
+    if target == "off":
+        # Said out loud: this is one of the ways a notification vanishes
         # without any error, and it looks identical to a broken integration.
         current_app.logger.info(
-            "notify OFF (Advanced > sign-in/out notifications is unticked) | "
-            "signed_in attendance_session:%s", session.id)
-        return False
-    return notify_once(
-        "signed_in", "group", "attendance_session", session.id,
+            "notify OFF (Advanced > Notification preferences) | %s %s:%s",
+            type_, related_type, related_id)
+        _record_silent(type_, "off", related_type, related_id, f"[off] {message}")
+        db.session.commit()
+        return False, "off"
+    return notify_once(type_, target, related_type, related_id, message), target
+
+
+def notify_signed_in(session):
+    sent, _ = _send_attendance(
+        "signed_in", "attendance_session", session.id,
         f"[OIA] {session.student.short_name} signed in.",
     )
+    return sent
 
 
 def notify_signed_out(session):
-    if not get_attendance_notify_enabled():
-        current_app.logger.info(
-            "notify OFF (Advanced > sign-in/out notifications is unticked) | "
-            "signed_out attendance_session:%s", session.id)
-        return False
     # A late sign-out lands days after the shift; announcing it as a plain
     # "signed out" reads as if they were still in the office just now.
     if session.flag_reason == "late_sign_out":
@@ -327,9 +352,8 @@ def notify_signed_out(session):
                 f"{session.date.isoformat()}.")
     else:
         text = f"[OIA] {session.student.short_name} signed out."
-    return notify_once(
-        "signed_out", "group", "attendance_session", session.id, text,
-    )
+    sent, _ = _send_attendance("signed_out", "attendance_session", session.id, text)
+    return sent
 
 
 def notify_no_show_run(slots, student):
@@ -349,8 +373,8 @@ def notify_no_show_run(slots, student):
     first = ordered[0]
     message = (f"[OIA] Reminder: {student.short_name} was scheduled "
                f"{span_text(ordered)} and hasn't signed in yet.")
-    sent = notify_once("no_show", "group", "slot", first.id, message)
-    _mark_covered("no_show", "group", "slot",
+    sent, target = _send_attendance("no_show", "slot", first.id, message)
+    _mark_covered("no_show", target, "slot",
                   [s.id for s in ordered[1:]], first.id, message)
     return sent
 
@@ -360,8 +384,9 @@ def notify_forgot_sign_out(session, run_slots):
     can still close it themselves as a late sign-out, which is the point of
     telling them while they still remember when they left."""
     when = span_text(run_slots) if run_slots else session.date.isoformat()
-    return notify_once(
-        "forgot_sign_out", "group", "attendance_session", session.id,
+    sent, _ = _send_attendance(
+        "forgot_sign_out", "attendance_session", session.id,
         f"[OIA] Reminder: {session.student.short_name} signed in for {when} "
         f"and hasn't signed out yet.",
     )
+    return sent

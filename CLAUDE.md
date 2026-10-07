@@ -267,7 +267,12 @@ still hear when the slot actually opens — and the group's 200/month quota ran 
 **Time-driven** (need §13): selection window opens; closing warning (~24h before
 close); no-show warning (run start + 30 min, if scheduled and not signed in);
 forgot-sign-out reminder (run's scheduled end + 1 hour, if still signed in — today's
-sessions only). Both grace periods are config.
+sessions only). Both grace periods are set on **Advanced**, not env vars.
+
+**Routing:** the four attendance messages (signed in, signed out, missed sign-in,
+missed sign-out) each go to the group, the admin bot, or nowhere, chosen per message
+on Advanced. Sign-in/out default to off (two group posts a shift is more than the
+quota carries). Changing a route never replays events already handled.
 
 **Overflow:** no-show and forgot-sign-out are the alerts the overseer must not miss.
 When the group bot's monthly quota is spent (LINE answers 429), they go to the admin

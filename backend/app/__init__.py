@@ -161,7 +161,7 @@ def create_app(config_class=Config):
             except ValueError:
                 pass
         from app.notifications.backends import automatic_notifications_are_live, delivery_problem
-        from app.utils.settings import get_attendance_notify_enabled
+        from app.utils.settings import get_notification_routes
         return jsonify({
             "ok": True,
             "now": now.isoformat(),
@@ -172,7 +172,7 @@ def create_app(config_class=Config):
             "notifications_live": automatic_notifications_are_live(app.config),
             "notification_backend": app.config.get("NOTIFICATION_BACKEND"),
             "notification_problem": delivery_problem(app.config),
-            "signin_notifications_enabled": get_attendance_notify_enabled(),
+            "notification_routes": get_notification_routes(),
         })
 
     @app.cli.command("seed-demo")
