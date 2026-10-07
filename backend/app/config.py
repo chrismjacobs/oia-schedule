@@ -50,11 +50,13 @@ class Config:
     SIGN_IN_OPENS_MINUTES_BEFORE = int(os.environ.get("SIGN_IN_OPENS_MINUTES_BEFORE", 10))
 
     # No-show grace period after slot start before flagging (CLAUDE.md #11)
-    NO_SHOW_GRACE_MINUTES = int(os.environ.get("NO_SHOW_GRACE_MINUTES", 15))
+    NO_SHOW_GRACE_MINUTES = int(os.environ.get("NO_SHOW_GRACE_MINUTES", 30))
 
-    # If a session is still open this long after sign-in, flag forgot-to-sign-out
-    # instead of guessing an end time (CLAUDE.md #8).
-    FORGOT_SIGNOUT_AFTER_HOURS = int(os.environ.get("FORGOT_SIGNOUT_AFTER_HOURS", 9))
+    # If a session is still open this long after its run's scheduled end, flag
+    # forgot-to-sign-out and remind the group, instead of guessing an end time
+    # (CLAUDE.md #9). Was 9 hours after sign-in, flag only — by then the
+    # student had long gone home and nobody was told.
+    FORGOT_SIGNOUT_MINUTES_AFTER_END = int(os.environ.get("FORGOT_SIGNOUT_MINUTES_AFTER_END", 60))
 
     # Closing warning fires this many hours before selection closes (CLAUDE.md #11)
     CLOSING_WARNING_HOURS_BEFORE = int(os.environ.get("CLOSING_WARNING_HOURS_BEFORE", 24))
@@ -126,7 +128,9 @@ class Config:
     LINE2_CHANNEL = os.environ.get("LINE2_CHANNEL")
     LINE2_SECRET = os.environ.get("LINE2_SECRET")
     LINE2_TOKEN = os.environ.get("LINE2_TOKEN")
-    LINE_ADMIN_USER_ID = os.environ.get("LINE_ADMIN_USER_ID")  # send /id to the admin bot to get it
+    # Send /id to the admin bot to get it. LINE2_GROUP_ID is accepted too, the
+    # name it was first entered under (it holds a user ID, not a group's).
+    LINE_ADMIN_USER_ID = os.environ.get("LINE_ADMIN_USER_ID") or os.environ.get("LINE2_GROUP_ID")
     SMTP_HOST = os.environ.get("SMTP_HOST")
     SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
     SMTP_USER = os.environ.get("SMTP_USER")

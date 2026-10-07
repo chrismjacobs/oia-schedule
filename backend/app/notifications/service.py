@@ -1,6 +1,7 @@
 """Idempotent notification dispatch. Every notification is gated by a
 sent-flag on notification_log so a missed/late/doubled /tick self-heals
 (CLAUDE.md #12)."""
+import requests
 from flask import current_app
 
 from app.extensions import db
@@ -9,6 +10,20 @@ from app.notifications.backends import admin_line_ready, get_backend
 from app.utils.runs import contiguous_runs, span_text
 from app.utils.settings import get_attendance_notify_enabled
 from app.utils.tz import local_now
+
+
+# Attendance alerts the overseer must not miss. When the group bot's monthly
+# quota is spent, LINE refuses the push with a 429; these then go to the admin
+# account (its own quota) rather than waiting, unsent, until next month.
+OVERFLOW_TO_ADMIN = {"no_show", "forgot_sign_out"}
+OVERFLOW_NOTE = "(Group bot is out of messages this month — sent here instead.)\n"
+
+
+def _should_overflow(type_, target, error):
+    response = getattr(error, "response", None)
+    return (type_ in OVERFLOW_TO_ADMIN and target == "group"
+            and response is not None and response.status_code == 429
+            and admin_line_ready(current_app.config))
 
 
 def notify_once(type_, target, related_type, related_id, message):
@@ -40,7 +55,15 @@ def notify_once(type_, target, related_type, related_id, message):
     # on?" is the first question whenever a message doesn't arrive.
     current_app.logger.info("notify SEND via=%s | %s | %r", backend.name, key, message)
     try:
-        backend.send(message)
+        try:
+            backend.send(message)
+        except requests.HTTPError as e:
+            if not _should_overflow(type_, target, e):
+                raise
+            backend = get_backend("admin")
+            current_app.logger.warning(
+                "notify OVERFLOW group quota spent, sending via=%s | %s", backend.name, key)
+            backend.send(OVERFLOW_NOTE + message)
     except Exception:
         # Swallowed, not re-raised. The row stays unsent, so the next /tick
         # retries it — that's the self-healing CLAUDE.md #13 asks for. Raising
@@ -330,3 +353,15 @@ def notify_no_show_run(slots, student):
     _mark_covered("no_show", "group", "slot",
                   [s.id for s in ordered[1:]], first.id, message)
     return sent
+
+
+def notify_forgot_sign_out(session, run_slots):
+    """One reminder per session left open past its run's end + grace. They
+    can still close it themselves as a late sign-out, which is the point of
+    telling them while they still remember when they left."""
+    when = span_text(run_slots) if run_slots else session.date.isoformat()
+    return notify_once(
+        "forgot_sign_out", "group", "attendance_session", session.id,
+        f"[OIA] Reminder: {session.student.short_name} signed in for {when} "
+        f"and hasn't signed out yet.",
+    )

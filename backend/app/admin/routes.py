@@ -21,7 +21,9 @@ from app.models import (
 from app.utils.decorators import overseer_required
 from app.utils.identity import assign_token
 from app.utils.tz import local_now
-from app.utils.settings import get_setting, set_setting, get_solver_weights, get_session_rules
+from app.utils.settings import (
+    get_setting, set_setting, get_solver_weights, get_session_rules, get_attendance_notify_enabled,
+)
 from app.utils.periods import weekdays_in_month
 from app.utils.slot_sync import (
     sync_month_slots, month_has_slots, AvailabilityLossRefused, MAX_LOST_DEFAULT,
@@ -1361,7 +1363,7 @@ def get_settings():
         "solver_session_rules": get_session_rules(),
         "solver_floor_hours": get_setting("solver_floor_hours", current_app.config["SOLVER_FLOOR_HOURS"]),
         "timecard_cadence": get_setting("timecard_cadence", current_app.config["TIMECARD_CADENCE_DEFAULT"]),
-        "notify_attendance_events": get_setting("notify_attendance_events", True),
+        "notify_attendance_events": get_attendance_notify_enabled(),
         "auto_advertise_enabled": get_setting("auto_advertise_enabled", False),
         "sign_in_opens_minutes_before": current_app.config["SIGN_IN_OPENS_MINUTES_BEFORE"],
         "no_show_grace_minutes": current_app.config["NO_SHOW_GRACE_MINUTES"],

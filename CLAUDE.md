@@ -265,7 +265,13 @@ fire the same way). *Leave requests originally went to the group to prime studen
 that a slot may open; the overseer decided they don't need to be public — students
 still hear when the slot actually opens — and the group's 200/month quota ran out.*
 **Time-driven** (need §13): selection window opens; closing warning (~24h before
-close); no-show warning (slot start + grace, if scheduled and not signed in).
+close); no-show warning (run start + 30 min, if scheduled and not signed in);
+forgot-sign-out reminder (run's scheduled end + 1 hour, if still signed in — today's
+sessions only). Both grace periods are config.
+
+**Overflow:** no-show and forgot-sign-out are the alerts the overseer must not miss.
+When the group bot's monthly quota is spent (LINE answers 429), they go to the admin
+account instead, prefixed with a note saying so. Other group messages just wait.
 
 - **Recipient:** all go to the **student LINE group** for v1 (no-show gently worded),
   except leave requests, which go to the overseer (above). The quota is per Official

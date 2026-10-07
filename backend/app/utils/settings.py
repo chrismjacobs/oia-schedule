@@ -61,7 +61,8 @@ def get_auto_advertise_enabled():
 
 
 def get_attendance_notify_enabled():
-    """Sign-in/out LINE notifications — on by default, but every sign-in and
-    sign-out fires one, which can add up fast on a busy day. Toggle from
-    Advanced if it turns out to be too much (CLAUDE.md #12)."""
-    return get_setting("notify_attendance_events", True)
+    """Sign-in/out LINE notifications — off by default: every sign-in and
+    sign-out is a group push, two per shift, which the free 200/month quota
+    can't carry. Missed sign-ins and sign-outs are reminded regardless. Tick
+    it on from Advanced if wanted (CLAUDE.md #12)."""
+    return get_setting("notify_attendance_events", False)

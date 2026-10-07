@@ -188,6 +188,11 @@ point its webhook at the same `/line/callback`, add it as a friend and send it
 both set, leave requests go to the group (no name or reason). **Advanced → LINE
 message quota** shows both accounts' usage.
 
+No-show reminders (`NO_SHOW_GRACE_MINUTES`, default 30 after the run starts) and
+forgot-sign-out reminders (`FORGOT_SIGNOUT_MINUTES_AFTER_END`, default 60 after
+the run's scheduled end) go to the group, and overflow to the admin account once
+the group bot's monthly quota is spent.
+
 Until `LINE_GROUP_ID` is set, use **Setup → Notification
 test send** with an explicit target user/group ID to check the wiring.
 If the selected backend isn't configured, the send is logged as an error and

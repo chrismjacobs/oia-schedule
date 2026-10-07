@@ -21,7 +21,7 @@ from app.models import (
 )
 from app.notifications.service import (
     notify_selection_open, notify_closing_warning, notify_no_show_run, notify_slots_open,
-    retry_failed,
+    notify_forgot_sign_out, retry_failed,
 )
 from app.utils.runs import contiguous_runs
 from app.utils.settings import get_auto_advertise_enabled
@@ -201,24 +201,46 @@ def _check_no_shows(now):
 
 
 def _flag_forgotten_signouts(now):
-    """Forgot-to-sign-out is common: flag it, never auto-close at a guessed
-    time (CLAUDE.md #8)."""
-    cutoff = now - timedelta(hours=current_app.config["FORGOT_SIGNOUT_AFTER_HOURS"])
+    """Forgot-to-sign-out is common: flag it and remind the group, never
+    auto-close at a guessed time (CLAUDE.md #9).
+
+    Due once the run the session signed in against has ended, plus grace. A
+    sign-in matching no scheduled run has no end to measure from, so it's
+    given the longest a session can be (4 hours) from sign-in. Overflows to
+    the admin bot when the group's quota is spent (OVERFLOW_TO_ADMIN)."""
+    from app.attendance.routes import _run_for_session, _todays_assignments
+
+    grace = timedelta(minutes=current_app.config["FORGOT_SIGNOUT_MINUTES_AFTER_END"])
     open_sessions = AttendanceSession.query.filter(
         AttendanceSession.signed_out_at.is_(None),
-        AttendanceSession.signed_in_at <= cutoff,
+        # Nothing can be due before the shortest possible run has ended.
+        AttendanceSession.signed_in_at <= now - grace,
         # NULL-safe: a plain session has flag_reason NULL, and in SQL
         # `NULL != 'forgot_sign_out'` is NULL, not true — written without
         # is_distinct_from this filter silently excluded every session that
         # had never been flagged, i.e. exactly the ones to flag.
         AttendanceSession.flag_reason.is_distinct_from("forgot_sign_out"),
     ).all()
+    flagged = 0
     for s in open_sessions:
+        run = _run_for_session(_todays_assignments(s.student_id, s.date), s)
+        if run:
+            last = run[-1].slot
+            end = datetime.combine(last.date, datetime.min.time()).replace(hour=last.hour) + timedelta(hours=1)
+        else:
+            end = s.signed_in_at + timedelta(hours=4)
+        if now < end + grace:
+            continue
         s.flagged = True
         s.flag_reason = "forgot_sign_out"
-    if open_sessions:
         db.session.commit()
-    return {"forgot_signout_flagged": len(open_sessions)}
+        # Flag any age, but only remind about today's: a session open since
+        # last week (or a backlog on first deploy) is the dashboard's to show,
+        # not a burst of group pushes.
+        if s.date == now.date():
+            notify_forgot_sign_out(s, [a.slot for a in run])
+        flagged += 1
+    return {"forgot_signout_flagged": flagged}
 
 
 def _auto_advertise_unfilled_slots(now):
