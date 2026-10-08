@@ -285,19 +285,13 @@
         <span class="hint">[[ populateMessage ]]</span>
       </div>
 
-      <!-- Only offered once there is a committed roster to override: before
-           that, a grid edit already reaches the schedule by itself and the
-           tickbox would just be a second way to do nothing. -->
-      <label v-if="hasCommittedRoster" class="override-toggle">
-        <input type="checkbox" v-model="overrideCommitted">
-        <span>
-          <b>Manual override</b> — apply edits to the committed roster
-          <span class="hint">Changes the live schedule for [[ currentMonthYm ]] without
-          reopening the month. Never notifies anyone.</span>
-        </span>
-      </label>
-
       <sync-note v-if="sync && syncWhere === 'grid'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
+
+      <!-- Raised by the edit that caused it, not armed beforehand: the plan
+           and the committed roster now disagree about one cell, so say so
+           while the overseer is still looking at the change they just made. -->
+      <divergence-note v-if="divergence" v-bind:d="divergence" v-bind:busy="busy"
+                       v-on:apply="applyReconcile" v-on:dismiss="divergence = null"></divergence-note>
       <override-note v-if="rosterOverride" v-bind:o="rosterOverride"
                      v-on:dismiss="rosterOverride = null"></override-note>
 
@@ -398,10 +392,10 @@ const app = createApp({
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
-      // Manual override: carry a grid edit through to the committed roster
-      // instead of leaving it as a plan-only change. Off unless deliberately
-      // ticked, and never notifies — see rosterOverride below.
-      overrideCommitted: false, rosterOverride: null,
+      // A grid edit changed the plan but left the committed roster saying
+      // something else: `divergence` is the offer to reconcile that one cell,
+      // `rosterOverride` is what reconciling actually did. Neither notifies.
+      divergence: null, rosterOverride: null,
     };
   },
   computed: {
@@ -425,11 +419,6 @@ const app = createApp({
         if (r.track === this.lane) map[r.date + "_" + r.hour] = r;
       });
       return map;
-    },
-    // A committed roster exists from commit onwards — including running and
-    // closed, since a correction to a past month is still a correction.
-    hasCommittedRoster() {
-      return ["committed", "running", "closed"].includes(this.currentMonthState);
     },
     // A lane is the worker type, so only that lane's students can be named
     // in it — same rule the server enforces.
@@ -588,38 +577,61 @@ const app = createApp({
       // "none" removes the cell from this lane for this month — not the same
       // as unavailable, which in the opt-in lane would say the same thing
       // twice, and in the paid one means something else entirely.
-      // A DELETE carries no body, so the override rides on the query string
-      // next to ?confirm=true.
-      const override = this.overrideCommitted && this.hasCommittedRoster;
+      this.rosterOverride = null;
 
       if (value === "none") {
         if (!row) return;
         const res = await this.withLossConfirm(confirmed => OIA.api.del(
-          "/api/admin/regular-slots/" + row.id
-          + "?" + new URLSearchParams({
-              ...(confirmed ? { confirm: "true" } : {}),
-              ...(override ? { override_committed: "true" } : {}),
-            }).toString()));
+          "/api/admin/regular-slots/" + row.id + (confirmed ? "?confirm=true" : "")));
         if (res === null) { await this.reloadRegularSlots(); return; }
         this.regularSlots = this.regularSlots.filter(r => r.id !== row.id);
         await this.showSync(res.slot_sync, "grid");
-        this.rosterOverride = res.roster_override || null;
+        this.divergence = res.roster_divergence || null;
         return;
       }
 
       const updated = await this.withLossConfirm(confirmed => row
         ? OIA.api.patch("/api/admin/regular-slots/" + row.id,
-                        { state, student_id: studentId, confirm: confirmed,
-                          override_committed: override })
+                        { state, student_id: studentId, confirm: confirmed })
         : OIA.api.post("/api/admin/months/" + this.monthId + "/regular-slots",
                        { date: d, hour: h, state, track: this.lane,
-                         student_id: studentId, confirm: confirmed,
-                         override_committed: override }));
+                         student_id: studentId, confirm: confirmed }));
       if (updated === null) { await this.reloadRegularSlots(); return; }
       this.regularSlots = this.regularSlots
         .filter(r => r.id !== updated.id).concat([updated]);
       await this.showSync(updated.slot_sync, "grid");
-      this.rosterOverride = updated.roster_override || null;
+      this.divergence = updated.roster_divergence || null;
+    },
+
+    // Carry the edit the overseer just made through to the committed roster.
+    // Only reachable from the divergence prompt, so there is always a specific
+    // cell and a visible reason for it.
+    async applyReconcile() {
+      const d = this.divergence;
+      if (!d) return;
+      this.busy = true;
+      try {
+        const res = await OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/reconcile-cell",
+          { date: d.date, hour: d.hour, track: d.track });
+        this.divergence = null;
+        this.rosterOverride = res;
+        await this.showSync(res.slot_sync, "grid");
+        await this.loadSlotCount();
+      } catch (e) {
+        // Refused server-side — the hour became a protected one between the
+        // edit and the click (someone claimed it, or availability arrived).
+        // Re-show the prompt in its blocked form rather than dropping the
+        // error on the floor.
+        if (e.payload && e.payload.divergence) {
+          this.divergence = e.payload.divergence;
+        } else {
+          this.divergence = Object.assign({}, d, { blocked_by: "offered_and_committed" });
+        }
+        await this.reloadRegularSlots();
+      } finally {
+        this.busy = false;
+      }
     },
     // A plan change came back with a slot-sync summary (null when the month
     // has no slots yet, i.e. nothing to sync). Only shown when it did
@@ -861,16 +873,57 @@ app.component("sync-note", {
     </div>`,
 });
 
-// What a manual override did to the committed roster. It always says that
-// nothing was sent: the quota is small and the whole point of this path is
-// that a correction is silent, so the screen states it rather than leaving
-// the overseer to wonder whether the group just got a message.
+// The plan and the committed roster disagree about one cell. Raised by the
+// edit that caused it, so the overseer decides with the change in front of
+// them — rather than arming a mode first and silently losing the change when
+// they forget, which is how a student stayed on the wrong day for five weeks.
+app.component("divergence-note", {
+  props: { d: { type: Object, required: true }, busy: Boolean },
+  emits: ["apply", "dismiss"],
+  computed: {
+    cell() { return this.d.date.slice(5) + " " + this.d.hour + ":00 (" + this.d.track + ")"; },
+    headline() {
+      if (this.d.action === "add") {
+        return "The roster has nobody on " + this.cell + ", but the plan now says "
+               + this.d.planned_student + ".";
+      }
+      if (this.d.action === "remove") {
+        return "The roster still has " + this.d.roster_student + " on " + this.cell
+               + ", but the plan no longer does.";
+      }
+      return "The roster has " + this.d.roster_student + " on " + this.cell
+             + ", but the plan now says " + this.d.planned_student + ".";
+    },
+    // Adding is free; taking a declared, committed hour off a student is the
+    // leave flow's job, so the button isn't offered for it.
+    blocked() { return this.d.blocked_by === "offered_and_committed"; },
+  },
+  template: `
+    <div class="statusline" :class="blocked ? 'is-shut' : 'is-open'" style="margin-top:10px;">
+      <strong v-text="headline"></strong>
+      <span v-if="blocked">
+        <b v-text="d.roster_student"></b> offered that hour and is committed to it, so it's
+        theirs — take them off through <b>Leave</b> instead, so it goes through approval and
+        the hour reopens for someone else. The plan change above stands either way.
+      </span>
+      <span v-else>Applying this changes the live schedule without reopening the month,
+        and sends nothing to anyone.</span>
+      <button v-if="!blocked" type="button" :disabled="busy" @click="$emit('apply')">
+        Apply to the committed roster</button>
+      <button class="secondary" type="button" @click="$emit('dismiss')">
+        <span v-if="blocked">OK</span><span v-else>Leave as a plan change</span></button>
+    </div>`,
+});
+
+// What reconciling actually did. It always says nothing was sent: the quota is
+// small and the point of this path is that a correction is silent, so the
+// screen states it rather than leaving the overseer to wonder.
 app.component("override-note", {
   props: { o: { type: Object, required: true } },
   emits: ["dismiss"],
   computed: {
     lines() {
-      const out = this.o.released.map(
+      const out = (this.o.released || []).map(
         r => "removed " + (r.student || "nobody") + " from " + r.date.slice(5) + " " + r.hour + ":00");
       if (this.o.claimed) {
         out.push("put " + this.o.claimed.student + " on "
@@ -887,7 +940,7 @@ app.component("override-note", {
   template: `
     <div class="statusline is-open" style="margin-top:10px;">
       <strong v-if="lines.length">Committed roster updated — <span v-text="lines.join('; ')"></span>.</strong>
-      <strong v-else>Committed roster unchanged — nothing was scheduled on that hour.</strong>
+      <strong v-else>Committed roster already agreed with the plan — nothing to change.</strong>
       <span>No message was sent.</span>
       <span v-if="notOffered">
         Note: <b v-text="notOffered"></b> didn't offer that hour this month.

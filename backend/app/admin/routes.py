@@ -688,37 +688,117 @@ def _sync_if_built(month):
     return sync_month_slots(month, max_lost=None if _sync_confirmed() else MAX_LOST_DEFAULT)
 
 
-# ---------------- Manual override of a committed roster ----------------
+# ---------------- Reconciling a committed roster with the plan ----------------
 #
-# A regular-grid edit changes the *plan*; by default it deliberately leaves a
-# committed roster alone, and sync_month_slots keeps any slot a committed
-# assignment hangs off (reporting it under "kept") rather than pulling an hour
-# out from under a live schedule.
+# A regular-grid edit changes the *plan*; it deliberately leaves a committed
+# roster alone, and sync_month_slots keeps any slot a committed assignment
+# hangs off (reporting it under "kept") rather than pulling an hour out from
+# under a live schedule.
 #
-# That safety is right as a default and wrong as the only option: it meant the
-# only way to fix one mis-scheduled cell in a committed month was to reopen the
-# month, edit, and recommit — three month-level state changes, each firing its
-# own group notification, for a change affecting one student. A student sat on
-# the wrong day for five weeks because the grid said unavailable and the roster
-# never heard about it.
+# That safety is right, but on its own it is how a student ends up sitting on
+# the wrong day for five weeks: the grid said unavailable, the roster never
+# heard, and nothing pointed out that the two disagreed. The only fix was to
+# reopen the month, edit, and recommit — three state changes, each firing its
+# own group notification, for a change affecting one student.
 #
-# So `override_committed` on a cell edit says "and apply it to the committed
-# roster too". It is **always silent**: nothing on this path notifies, because
-# these are corrections, not news, and the group's push quota is small enough
-# that routine admin tidying must not spend it. When a change genuinely needs
-# announcing the overseer sends it deliberately from Advanced.
+# So after a cell edit we say whether the roster now disagrees, and offer to
+# reconcile that one cell. Deliberately *after* rather than a mode armed
+# beforehand: a mode you must set first fails silently when you forget it, and
+# forgetting it recreates the very divergence this exists to catch.
+#
+# Reconciling is **always silent**. These are corrections, not news, and the
+# group's push quota is too small for routine admin tidying to spend it. When
+# a change genuinely needs announcing, the overseer sends it from Advanced.
+#
+# What may be reconciled is narrow, and the rule is the overseer's: adding
+# someone is free, taking someone off is not. A student declared availability
+# and was committed against it, so their hours are theirs — removing them is
+# the leave flow (request, approve, slot reopens), not a grid edit. The one
+# exception is an hour the student never offered: they were never eligible for
+# it, so that is a scheduling error rather than a commitment, and it is the
+# only way to undo a bad regular_lock without filing fake leave.
 
-def _override_requested(data):
-    return bool((data or {}).get("override_committed"))
+def _offered_the_hour(student_id, slot_id):
+    return Availability.query.filter_by(slot_id=slot_id, student_id=student_id).first() is not None
 
 
-def _override_summary(applied, released, claimed):
-    """What the override did to the committed roster, or None when it wasn't
-    asked for. `notified` is in the payload and always false on purpose — the
-    screen should state that nothing was sent, so nobody has to remember."""
-    if not applied:
+def _planned_occupant(month, d, hour, track):
+    """Who the *plan* says works this cell: a student id, or None for an hour
+    the grid leaves unassigned, marks unavailable, or has no row for."""
+    row = RegularSlot.query.filter_by(month_id=month.id, date=d, hour=hour, track=track).first()
+    if row is None or row.state != "assigned":
         return None
-    return {"applied": True, "released": released, "claimed": claimed, "notified": False}
+    return row.student_id
+
+
+def _roster_divergence(month, d, hour, track):
+    """How the committed roster differs from the plan for one cell, or None
+    when they agree (or there is no committed roster to differ from).
+
+    `action` is what reconciling would do, and `blocked_by` is set when it
+    would not be allowed — so the UI can explain rather than offer a button
+    that fails.
+    """
+    schedule = _committed_schedule(month)
+    if schedule is None:
+        return None
+
+    slot = _cell_slot(month, d, hour, track)
+    planned_id = _planned_occupant(month, d, hour, track)
+    current = (Assignment.query.filter_by(schedule_id=schedule.id, slot_id=slot.id).first()
+               if slot is not None else None)
+    current_id = current.student_id if current else None
+    if current_id == planned_id:
+        return None
+
+    def name(sid):
+        s = Student.query.get(sid) if sid else None
+        return s.short_name if s else None
+
+    out = {
+        "date": d.isoformat(), "hour": hour, "track": track,
+        "planned_student": name(planned_id), "roster_student": name(current_id),
+        "blocked_by": None,
+    }
+    if current_id is None:
+        out["action"] = "add"
+    elif planned_id is None:
+        out["action"] = "remove"
+    else:
+        out["action"] = "replace"
+
+    # Taking a committed, declared hour off a student is the leave flow's job.
+    if current_id is not None and _offered_the_hour(current_id, slot.id):
+        out["blocked_by"] = "offered_and_committed"
+    return out
+
+
+def _reconcile_cell(month, d, hour, track):
+    """Make the committed roster match the plan for one cell.
+
+    Returns (summary, error). Order is release -> sync -> claim: while a
+    committed assignment still points at the slot, sync keeps the slot, so an
+    hour leaving the plan would otherwise survive as an orphan; and a cell
+    joining the plan has no slot to assign until sync has built it.
+    """
+    divergence = _roster_divergence(month, d, hour, track)
+    if divergence is None:
+        return {"changed": False, "released": [], "claimed": None, "notified": False}, None
+    if divergence["blocked_by"] == "offered_and_committed":
+        return None, (jsonify({
+            "error": "hours_are_committed",
+            "message": (f"{divergence['roster_student']} offered this hour and is committed "
+                        f"to it. Take them off through Leave so it goes through approval and "
+                        f"the hour reopens properly."),
+            "divergence": divergence,
+        }), 409)
+
+    planned_id = _planned_occupant(month, d, hour, track)
+    released = _release_committed(month, d, hour, track)
+    sync = _sync_if_built(month)
+    claimed = _claim_committed(month, d, hour, track, planned_id) if planned_id else None
+    return {"changed": bool(released or claimed), "released": released, "claimed": claimed,
+            "slot_sync": sync, "notified": False, "action": divergence["action"]}, None
 
 
 def _committed_schedule(month):
@@ -748,6 +828,12 @@ def _release_committed(month, d, hour, track):
             "student": a.student.short_name if a.student else None,
         })
         db.session.delete(a)
+    if released:
+        # slot.state has to follow the assignment — every other path that
+        # moves an assignment keeps it in step (see leave/routes), and a slot
+        # left saying "assigned" with nobody on it reads as covered on the
+        # grid while the roster says otherwise.
+        slot.state = "open"
     db.session.flush()
     return released
 
@@ -774,6 +860,7 @@ def _claim_committed(month, d, hour, track, student_id):
     db.session.flush()
     db.session.add(Assignment(schedule_id=schedule.id, slot_id=slot.id,
                               student_id=student_id, source="manual_edit"))
+    slot.state = "assigned"
     db.session.flush()
     student = Student.query.get(student_id)
     offered = Availability.query.filter_by(slot_id=slot.id, student_id=student_id).first() is not None
@@ -1007,21 +1094,11 @@ def update_regular_slot(regular_slot_id):
     row.student_id = student_id
     db.session.flush()
 
-    override = _override_requested(data)
-    released, claimed = [], None
-    if override:
-        # Release first regardless of the new state: becoming unavailable or
-        # unassigned clears the cell, and becoming assigned-to-someone-else is
-        # a move, so the old occupant goes either way.
-        released = _release_committed(row.month, row.date, row.hour, row.track)
-
     sync = _sync_if_built(row.month)
-
-    if override and state == "assigned":
-        claimed = _claim_committed(row.month, row.date, row.hour, row.track, student_id)
     db.session.commit()
     return jsonify(dict(row.to_dict(), slot_sync=sync,
-                        roster_override=_override_summary(override, released, claimed)))
+                        roster_divergence=_roster_divergence(
+                            row.month, row.date, row.hour, row.track)))
 
 
 @bp.post("/months/<int:month_id>/regular-slots")
@@ -1059,18 +1136,10 @@ def create_regular_slot(month_id):
     db.session.add(row)
     db.session.flush()
 
-    override = _override_requested(data)
-    released, claimed = [], None
-    if override:
-        released = _release_committed(month, d, hour, track)
-
     sync = _sync_if_built(month)
-
-    if override and state == "assigned":
-        claimed = _claim_committed(month, d, hour, track, student_id)
     db.session.commit()
     return jsonify(dict(row.to_dict(), slot_sync=sync,
-                        roster_override=_override_summary(override, released, claimed))), 201
+                        roster_divergence=_roster_divergence(month, d, hour, track))), 201
 
 
 @bp.delete("/regular-slots/<int:regular_slot_id>")
@@ -1085,15 +1154,39 @@ def delete_regular_slot(regular_slot_id):
     db.session.delete(row)
     db.session.flush()
 
-    # ?override_committed=true: a DELETE carries no body, so the flag comes in
-    # on the query string alongside the existing ?confirm=true.
-    override = request.args.get("override_committed") == "true"
-    released = _release_committed(month, *cell) if override else []
-
     sync = _sync_if_built(month)
     db.session.commit()
     return jsonify({"ok": True, "slot_sync": sync,
-                    "roster_override": _override_summary(override, released, None)})
+                    "roster_divergence": _roster_divergence(month, *cell)})
+
+
+@bp.post("/months/<int:month_id>/reconcile-cell")
+@overseer_required
+def reconcile_cell(month_id):
+    """Make the committed roster agree with the plan for one cell.
+
+    Offered right after the edit that caused the divergence, so the overseer
+    acts on something they can see rather than arming a mode beforehand. Sends
+    nothing — see the notes above _offered_the_hour.
+    """
+    month = Month.query.get_or_404(month_id)
+    data = request.get_json(force=True) or {}
+    track = _cell_track(data)
+    try:
+        d = date_cls.fromisoformat(data.get("date") or "")
+    except ValueError:
+        return jsonify({"error": "invalid_date"}), 400
+    hour = data.get("hour")
+    if track is None or hour not in SLOT_HOURS:
+        return jsonify({"error": "invalid_cell"}), 400
+
+    summary, err = _reconcile_cell(month, d, hour, track)
+    if err:
+        db.session.rollback()
+        body, code = err
+        return body, code
+    db.session.commit()
+    return jsonify(summary)
 
 
 # ---------------- Selection progress (who has answered for a month) ----------------
