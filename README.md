@@ -103,7 +103,7 @@ The close-out report is derived, never stored, so the only ways a month's
 numbers leave the database are **Download CSV** (utf-8-sig, so Excel on Windows
 reads Chinese names correctly), the **print** view, and **Post to LINE**, which
 sends the per-student hours summary to the group once per month. All three are
-on Setup → Month report, for any month, not only at close.
+on the **Report** tab, for any month, not only at close.
 
 ## Tests
 

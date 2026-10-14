@@ -3,250 +3,132 @@
 {% block content %}
 <div id="regular-app" v-cloak>
 
-  <!-- ============ 1. Month setup ============ -->
+  <!-- ============ Month ============ -->
   <div class="panel">
-    <h2>Month setup 月份設定</h2>
-    <p class="hint">Pick the month you're working on, and set the days the office is shut.
-      Closed dates produce no slots at all.</p>
-
-    <div class="field-row" style="margin-top:10px;">
-      <div class="field"><label>Month 月份</label>
+    <div class="controls">
+      <div class="field" style="flex:0 1 260px; margin-bottom:0;">
+        <label>Month 月份</label>
         <select v-model.number="monthId">
           <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] — [[ m.state ]]</option>
         </select>
       </div>
-      <div class="field"><label>Add a month (YYYY-MM)</label><input v-model="newMonthYm" placeholder="2026-11"></div>
-      <div class="field" style="align-self:end;"><button class="secondary" v-bind:disabled="busy" v-on:click="createMonth">Create</button></div>
+      <button class="secondary" v-if="!addingMonth" v-on:click="addingMonth = true">+ New month</button>
+      <template v-else>
+        <div class="field" style="flex:0 1 160px; margin-bottom:0;">
+          <label>New month</label>
+          <input type="month" v-model="newMonthYm" placeholder="2026-11">
+        </div>
+        <button class="secondary" v-bind:disabled="busy || !newMonthYm" v-on:click="createMonth">Create</button>
+        <button class="linklike" v-on:click="addingMonth = false">Cancel</button>
+      </template>
+      <label class="inline-check" style="margin-left:auto;">
+        <input type="checkbox" v-model="guide"> Guide 說明
+      </label>
     </div>
-
-    <template v-if="monthId">
-      <h3 style="margin-top:8px;">Closed dates 休假日</h3>
-      <p class="hint" v-if="!closedDates.length">None — the office is open every weekday this month.</p>
-      <ul style="padding-left:18px; margin-bottom:10px;" v-else>
-        <li v-for="c in closedDates" v-bind:key="c.id" style="margin-bottom:4px;">
-          <span class="mono">[[ c.date ]]</span> [[ c.reason ]]
-          <button class="secondary" v-on:click="removeClosedDate(c.id)">Delete</button>
-        </li>
-      </ul>
-      <form v-on:submit.prevent="addClosedDate" class="field-row">
-        <div class="field"><label>Date</label><input type="date" v-model="newClosedDate.date" required></div>
-        <div class="field"><label>Reason</label><input v-model="newClosedDate.reason" placeholder="National holiday"></div>
-        <div class="field" style="align-self:end;"><button class="secondary" type="submit">Add</button></div>
-      </form>
-      <sync-note v-if="sync && syncWhere === 'setup'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
-    </template>
+    <p class="hint" v-if="monthMessage" style="margin-top:8px;">[[ monthMessage ]]</p>
   </div>
 
-  <!-- ============ 2. Selection control ============ -->
-  <div class="panel" v-if="monthId">
-    <h2>Selection control [[ currentMonthYm ]] <span class="hint">選填開放控制</span></h2>
+  <!-- ============ Closed dates ============ -->
+  <!-- Open while the month is being set up; folded away afterwards, but still
+       reachable — a day can close mid-month (typhoon day). -->
+  <details class="panel" v-if="monthId" v-bind:open="inSetup">
+    <summary>Closed dates 休假日 <span class="hint mono">[[ closedDates.length || 'none' ]]</span></summary>
+    <p class="hint" v-if="guide">Days the office is shut. A closed date gets no slots at all.</p>
+    <ul class="plainlist" v-if="closedDates.length">
+      <li v-for="c in closedDates" v-bind:key="c.id">
+        <span class="mono">[[ c.date ]]</span> [[ c.reason ]]
+        <button class="linklike" v-on:click="removeClosedDate(c.id)">Delete</button>
+      </li>
+    </ul>
+    <form v-on:submit.prevent="addClosedDate" class="field-row">
+      <div class="field"><label>Date</label><input type="date" v-model="newClosedDate.date" required></div>
+      <div class="field"><label>Reason</label><input v-model="newClosedDate.reason" placeholder="National holiday"></div>
+      <div class="field" style="align-self:end; flex:0 0 auto; min-width:0;"><button class="secondary" type="submit">Add</button></div>
+    </form>
+    <p class="hint" v-if="datesMessage">[[ datesMessage ]]</p>
+    <sync-note v-if="sync && syncWhere === 'setup'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
+  </details>
 
-    <div class="statusline" v-bind:class="selectionOpen ? 'is-open' : 'is-shut'">
-      <strong>[[ selectionOpen ? 'Students CAN pick hours right now' : 'Students CANNOT pick hours right now' ]]</strong>
-      <span class="hint">— the state below is what decides this, on its own.</span>
-    </div>
-
-    <div class="field-row" style="margin-top:12px;">
-      <div class="field"><label>State 狀態 — this is the switch</label>
-        <select v-bind:value="currentMonthState" v-bind:disabled="busy"
-                v-on:change="setMonthState($event.target.value)">
-          <option v-for="s in MONTH_STATES" v-bind:key="s" v-bind:value="s">[[ s ]][[ s === forwardStep ? '  (usual next step)' : '' ]]</option>
-        </select>
-      </div>
-      <div class="field" style="flex:2 1 340px;">
-        <label>What that means</label>
-        <p class="hint" style="margin-top:6px;">[[ STATE_HELP[currentMonthState] ]]</p>
-      </div>
-    </div>
-    <p class="hint" v-if="monthMessage" style="margin-bottom:10px;">[[ monthMessage ]]</p>
-
-    <div class="statusline is-shut" v-if="currentMonthState === 'committed'">
-      <strong>Starts on its own.</strong>
-      <span class="hint">Once [[ currentMonthYm ]] begins, the background job moves this to
-        running and no-show detection switches on. No need to click anything.</span>
-    </div>
-
-    <!-- The report is derived, never stored, so it can be pulled up for any
-         month at any time — closing isn't the only way to see it. -->
-    <p class="hint" v-if="!closeout" style="margin-bottom:10px;">
-      <button class="secondary" v-on:click="showReport" v-bind:disabled="busy">Month report 月報表</button>
-      <span style="margin-left:8px;">Hours per student, and the file for the salary/insurance paperwork.</span>
-    </p>
-
-    <!-- Close-out: the report is the point of closing, so it's shown right here -->
-    <div class="closeout" v-if="closeout">
-      <h3>Close-out report [[ currentMonthYm ]]</h3>
-      <div class="summary" style="margin:10px 0 0;">
-        <div class="stat"><div class="k">Coverage</div><div class="v">[[ closeout.coverage_pct ]]<small>%</small></div></div>
-        <div class="stat gap"><div class="k">Uncovered</div><div class="v mono">[[ closeout.uncovered_slots.length ]]</div></div>
-        <div class="stat gap"><div class="k">No-shows</div><div class="v mono">[[ closeout.no_shows.length ]]</div></div>
-        <div class="stat gap"><div class="k">Unscheduled sign-ins</div><div class="v mono">[[ closeout.signed_in_not_scheduled.length ]]</div></div>
-      </div>
-      <table class="data" style="margin-top:10px;">
-        <thead><tr><th>Student</th><th>Scheduled</th><th>Recorded</th><th>Gap</th><th>No-shows</th><th>Leave</th></tr></thead>
-        <tbody>
-          <tr v-for="row in closeout.gap" v-bind:key="row.student_id">
-            <td>[[ row.student ? (row.student.chinese_name + ' ' + row.student.english_name) : '#' + row.student_id ]]</td>
-            <td class="mono">[[ row.scheduled_hours ]]</td>
-            <td class="mono">[[ row.recorded_hours ]]</td>
-            <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
-            <td class="mono">[[ row.no_shows ]]</td>
-            <td class="mono">[[ row.leave_approved ]]</td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="hint" style="margin-top:8px;">
-        Leave: [[ closeout.leave_patterns.too_often.length ]] student(s) over the frequent-leave threshold,
-        [[ closeout.leave_patterns.too_late.length ]] short-notice request(s).
-      </p>
-      <!-- Day by day, under the summary. The table above says how many
-           hours; this says which hours and what happened in them, which is
-           the question that arrives the moment a number looks wrong. -->
-      <div class="detail-report" v-if="detail">
-        <h3 style="margin-top:16px;">Day by day 逐日明細</h3>
-        <div class="noprint" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:4px 0 10px;">
-          <label class="inline-check" style="margin:0;">
-            <input type="checkbox" v-model="detailOnlyFlagged"> Only days needing attention
-          </label>
-          <span class="hint">[[ detailDayCount ]] day-record[[ detailDayCount === 1 ? '' : 's' ]] shown.</span>
-        </div>
-
-        <div class="drep-student" v-for="r in detailShown" v-bind:key="r.student_id">
-          <div class="drep-head">
-            <oia-token v-bind:student="r.student" size="sm"></oia-token>
-            <strong>[[ r.student ? (r.student.chinese_name + ' ' + r.student.english_name) : '#' + r.student_id ]]</strong>
-            <span class="hint mono">scheduled [[ r.scheduled_hours ]]h · recorded [[ r.recorded_hours ]]h
-              · <span v-bind:class="r.scheduled_hours - r.recorded_hours > 0 ? 'gap-warn' : ''">gap [[ r.scheduled_hours - r.recorded_hours ]]h</span></span>
-          </div>
-          <table class="data drep">
-            <thead><tr>
-              <th>Date</th><th>Scheduled</th><th>Recorded</th><th>In / out</th>
-              <th>Status</th><th>What happened</th>
-            </tr></thead>
-            <tbody>
-              <tr v-for="d in r.days" v-bind:key="d.date">
-                <td class="mono">[[ WEEKDAY_LABELS[d.weekday] ]] [[ d.date.slice(5) ]]</td>
-                <td class="mono">[[ d.scheduled.join(', ') || '—' ]]<span class="lane-tag"
-                    v-if="d.tracks.includes('SW')">SW</span></td>
-                <td class="mono">[[ d.recorded.join(', ') || '—' ]]</td>
-                <td class="mono hint">[[ d.signed_in_at ? d.signed_in_at + '–' + (d.signed_out_at || '?') : '—' ]]</td>
-                <td><span class="badge" v-bind:class="DETAIL_STATUS[d.status][1]">[[ DETAIL_STATUS[d.status][0] ]]</span></td>
-                <td class="drep-what">
-                  <div v-if="d.missed.length" class="warn-text">missed [[ d.missed.join(', ') ]]</div>
-                  <div v-if="d.flag_reason" class="warn-text">flag: [[ d.flag_reason.replace('_', ' ') ]]</div>
-                  <div v-for="(lv, i) in d.leave" v-bind:key="i">
-                    leave ([[ lv.status ]]) [[ lv.hour ]]:00 — [[ lv.reason ]]
-                  </div>
-                  <div v-if="d.tasks.length">tasks: [[ d.tasks.join(', ') ]]</div>
-                  <div v-if="d.note" class="drep-note">[[ d.note ]]</div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="hint" v-if="!detailShown.length">Nothing to show with this filter.</p>
-      </div>
-
-      <!-- Export row: the report is never stored, so these are the only ways
-           a month's numbers leave the database. -->
-      <p class="noprint" style="margin-top:10px;">
-        <a class="btn secondary" v-bind:href="'/api/admin/months/' + monthId + '/report.csv'">Download CSV</a>
-        <a class="btn secondary" style="margin-left:8px;"
-           v-bind:href="'/api/admin/months/' + monthId + '/report-detail.csv'">Detail CSV</a>
-        <button class="secondary" style="margin-left:8px;" v-on:click="toggleDetail" v-bind:disabled="busy">
-          [[ detail ? 'Hide day-by-day' : 'Show day-by-day 逐日明細' ]]</button>
-        <button class="secondary" style="margin-left:8px;" v-on:click="printReport">Print 列印</button>
-        <button class="secondary" style="margin-left:8px;" v-on:click="postReportToLine" v-bind:disabled="busy">
-          Post to LINE 傳到群組</button>
-        <button class="secondary" style="margin-left:8px;" v-on:click="closeout = null; detail = null">Dismiss</button>
-      </p>
-      <p class="hint noprint" v-if="reportMessage">[[ reportMessage ]]</p>
-    </div>
-
-    <h3 style="margin-top:14px;">Scheduled open / close 自動開關時間</h3>
-    <p class="hint">These don't open selection themselves — they tell the background job when to
-      <em>move the state for you</em>, once each. Change the state by hand at any time and it sticks;
-      the schedule won't undo it. Saving new times re-arms them.</p>
-    <div class="field-row" style="margin-top:8px;">
+  <!-- ============ Selection open / close times ============ -->
+  <details class="panel" v-if="monthId && beforeCommit" v-bind:open="inSetup">
+    <summary>Selection opens / closes 選填時間
+      <span class="hint mono" v-if="window">[[ formatDateTime(window.opens_at) ]] → [[ formatDateTime(window.closes_at) ]]</span>
+      <span class="hint" v-else>not set</span>
+    </summary>
+    <p class="hint" v-if="guide">Selection opens and closes by itself at these times. Saving new
+      times re-arms them.</p>
+    <div class="field-row">
       <div class="field"><label>Opens</label><input type="datetime-local" v-model="swOpens"></div>
       <div class="field"><label>Closes</label><input type="datetime-local" v-model="swCloses"></div>
-      <div class="field" style="align-self:end;"><button class="secondary" v-on:click="saveSelectionWindow">Save times</button></div>
+      <div class="field" style="align-self:end; flex:0 0 auto; min-width:0;"><button class="secondary" v-on:click="saveSelectionWindow">Save</button></div>
     </div>
-    <p class="hint" v-if="window">
-      Opens: [[ window.opened_applied_at ? 'already applied ' + window.opened_applied_at.slice(0, 16).replace('T', ' ') : 'pending' ]]
-      · Closes: [[ window.closed_applied_at ? 'already applied ' + window.closed_applied_at.slice(0, 16).replace('T', ' ') : 'pending' ]]
-    </p>
-    <p class="hint" v-else>No schedule set — the state only ever changes when you change it.</p>
-  </div>
+    <p class="hint" v-if="timesMessage">[[ timesMessage ]]</p>
+  </details>
 
-  <!-- ============ 3. Build this month's slots ============ -->
+  <!-- ============ The one action this month needs next ============ -->
+  <!-- At most one button, and which one follows from where the month is:
+       populate first, recommit once the roster is committed. In between
+       there is nothing to press — edits save themselves and the commit
+       happens on the Commit tab — so only the status is shown. -->
   <div class="panel" v-if="monthId">
-    <h2>Build slots 產生時段 <span class="hint">[[ currentMonthYm ]]</span></h2>
-    <p class="hint">Two steps, in order. The weekly pattern below is copied into this month, then
-      turned into the slots students actually tick. Until slots exist, the availability grid is
-      blank for everyone no matter what the state says.</p>
-
-    <div class="buildstep">
-      <div>
-        <strong>1. Pattern → this month</strong>
-        <p class="hint">[[ regularSlots.length ? regularSlots.length + ' cells set for this month.' : 'Not copied yet.' ]]
-          <span v-if="staleCount"> · <b>[[ staleCount ]] differ from the master template</b> — re-sync to apply your template edits.</span></p>
-      </div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button class="secondary" v-bind:disabled="busy" v-on:click="populateMonth(false)">Fill missing</button>
-        <button class="secondary" v-bind:disabled="busy" v-on:click="populateMonth(true)">Re-sync from template</button>
-      </div>
+    <div class="controls">
+      <button v-if="stage === 'populate'" v-bind:disabled="busy" v-on:click="populateMonth">
+        Populate month from template</button>
+      <button v-else-if="stage === 'recommit'" v-bind:disabled="busy || !applicable.length" v-on:click="recommit">
+        Recommit[[ applicable.length ? ' ' + applicable.length + ' change' + (applicable.length === 1 ? '' : 's') : '' ]]</button>
+      <span class="hint">[[ stageStatus ]]
+        <a v-if="stage === 'commit' && pastSelection" v-bind:href="'/draft?month=' + monthId">Commit</a></span>
     </div>
-    <p class="hint" v-if="populateMessage">[[ populateMessage ]]</p>
+    <p class="hint" v-if="guide" style="margin-top:8px;">[[ STAGE_GUIDE[stage] ]]</p>
+    <p class="hint" v-if="actionMessage" style="margin-top:8px;">[[ actionMessage ]]</p>
 
-    <div class="buildstep">
-      <div>
-        <strong>2. This month → slots</strong>
-        <p class="hint">[[ slotCount === null ? '…' : slotCount + ' slots exist.' ]]
-          Hours marked Unavailable and closed days never get one.</p>
-      </div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button v-bind:disabled="busy" v-on:click="generateSlots">[[ slotCount ? 'Update slots' : 'Build slots' ]]</button>
-      </div>
+    <!-- Edits made to this month's grid since the roster was committed. The
+         plan has changed; the live roster hasn't until Recommit. -->
+    <ul class="plainlist" v-if="pending.length" style="margin-top:10px;">
+      <li v-for="d in pending" v-bind:key="pendingKey(d)">
+        <span class="mono">[[ d.date.slice(5) ]] [[ d.hour ]]:00 [[ d.track ]]</span>
+        [[ d.roster_student || 'nobody' ]] → [[ d.planned_student || 'nobody' ]]
+        <span class="badge warn" v-if="isBlocked(d)">[[ d.roster_student ]] offered this hour — take them off through Leave</span>
+        <button class="linklike" v-on:click="dropPending(d)">[[ isBlocked(d) ? 'OK' : 'Skip' ]]</button>
+      </li>
+    </ul>
+    <div class="statusline is-open" v-if="recommitResult" style="margin-top:10px;">
+      <strong v-if="recommitResult.lines.length">Committed roster updated — [[ recommitResult.lines.join('; ') ]].</strong>
+      <strong v-else>Nothing to change.</strong>
+      <span>No message was sent.</span>
+      <span v-if="recommitResult.notOffered.length">Note: [[ recommitResult.notOffered.join(', ') ]] didn't offer that hour this month.</span>
+      <button class="secondary" type="button" v-on:click="recommitResult = null">Dismiss</button>
     </div>
-    <p class="hint" v-if="genMessage">[[ genMessage ]]</p>
     <sync-note v-if="sync && syncWhere === 'build'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
-    <p class="hint">Once slots exist, later changes apply by themselves — closing a day, or switching
-      an hour between Unavailable and open, adds or removes just that hour's slot, and only the
-      student picks on that hour are dropped. Hours someone is scheduled on in a committed roster are
-      never removed; you're told about them instead. If selection opens (by hand or on schedule)
-      before slots are built, they're built from this plan first.</p>
   </div>
 
   <!-- Both grids below show one lane at a time. Two grids rather than two
        selects per cell: the lanes are edited separately, and the unpaid one
        is mostly empty, so showing them together would be mostly blank space. -->
-  <div class="panel lane-switch">
-    <h2>Worker lane 工讀類別</h2>
-    <div class="tabs" style="max-width:360px;">
+  <div class="panel">
+    <div class="tabs" style="max-width:360px; margin-top:0;">
       <button type="button" class="tab" v-for="t in LANE_ORDER" v-bind:key="t"
               v-bind:class="{ on: lane === t }" v-on:click="lane = t">[[ LANE_LABELS[t] ]]</button>
     </div>
-    <p class="hint" style="margin-top:8px;" v-if="lane === 'OW'">
-      The paid roster. Every weekday hour is staffed unless it is marked
-      <strong>unavailable</strong>.
-    </p>
-    <p class="hint" style="margin-top:8px;" v-else>
-      The unpaid roster — service workers and TAs. This one is the other way
-      round: an hour is staffed only where you say so, so most of the grid
-      reads <strong>none</strong>. An hour set here runs alongside the paid
-      worker on the same hour, not instead of them.
-    </p>
+    <template v-if="guide">
+      <p class="hint" style="margin-top:8px;" v-if="lane === 'OW'">
+        The paid roster. Every weekday hour is staffed unless it is marked <strong>unavailable</strong>.
+      </p>
+      <p class="hint" style="margin-top:8px;" v-else>
+        The unpaid roster — service workers and TAs. An hour is staffed only where you say so, so
+        most of the grid reads <strong>none</strong>. It runs alongside the paid worker on the
+        same hour, not instead of them.
+      </p>
+    </template>
   </div>
 
   <div class="panel">
-    <h2>Master template 固定班表樣板 <span class="hint">[[ LANE_LABELS[lane] ]]</span></h2>
-    <p class="hint">
-      The recurring weekly pattern — set once, applied to every month generated afterward.
-      <strong>Unavailable</strong> hours never get a slot at all (the office isn't staffed then).
-      <strong>Assigned</strong> hours are a standing claim: the solver locks that student in
-      first, but only if they actually select the hour that month — otherwise it's open to
-      anyone who did.
+    <h2>Template 固定班表樣板 <span class="hint">[[ LANE_LABELS[lane] ]]</span></h2>
+    <p class="hint" v-if="guide">
+      The recurring weekly pattern — set once, copied into each month when you populate it.
+      <strong>Unavailable</strong> hours never get a slot. <strong>Assigned</strong> hours are a
+      standing claim: that student is locked in first, but only if they select the hour that
+      month — otherwise it's open to anyone who did.
     </p>
     <div class="weekwrap" style="margin-top:12px;">
       <table class="grid">
@@ -276,67 +158,78 @@
     </div>
   </div>
 
-  <div class="panel">
-    <h2>This month 本月班表 <span class="hint" v-if="currentMonthState">[[ currentMonthYm ]]</span></h2>
+  <div class="panel" v-if="monthId && regularSlots.length">
+    <h2>[[ currentMonthYm ]] 本月班表 <span class="hint">[[ LANE_LABELS[lane] ]]</span></h2>
+    <p class="hint" v-if="guide">One-off changes for this month only — the template is untouched.
+      Once the roster is committed, edits here wait for Recommit.</p>
 
-    <template v-if="monthId">
-      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <button v-bind:disabled="busy" v-on:click="populateMonth(false)">Populate from template</button>
-        <span class="hint">[[ populateMessage ]]</span>
+    <div class="statusline" v-if="applicable.length" style="margin-top:10px;">
+      <strong>[[ applicable.length ]] change[[ applicable.length === 1 ? '' : 's' ]] not in the committed roster yet.</strong>
+      <button type="button" v-bind:disabled="busy" v-on:click="recommit">Recommit</button>
+    </div>
+    <sync-note v-if="sync && syncWhere === 'grid'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
+
+    <template v-for="(week, wi) in weeks" v-bind:key="wi">
+      <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
+      <div class="weekwrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="h">時 / hr</th>
+              <th v-for="d in week" v-bind:key="d" v-bind:class="dayHeadClass(d)"
+                  v-bind:title="dayTitle(d)">
+                [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
+                <div class="day-tag" v-if="isClosedDay(d)">closed</div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="h in HOURS" v-bind:key="h">
+              <td class="h mono">[[ hourLabel(h) ]]</td>
+              <td v-for="d in week" v-bind:key="d + '_' + h"
+                  class="reg-cell" v-bind:class="regularCellClass(d, h)"
+                  v-bind:style="regularCellStyle(d, h)">
+                <!-- In the unpaid lane most cells have no row at all,
+                     and "none" is a real answer there, so the select is
+                     always offered rather than only where a row exists. -->
+                <select v-if="isEditableDay(d) && (regularRow(d, h) || lane !== 'OW')"
+                        v-bind:value="regularCellValue(d, h)"
+                        v-on:change="onRegularCellChange(d, h, $event.target.value)">
+                  <option value="none" v-if="lane !== 'OW'">none</option>
+                  <option value="unavailable">[[ stateLabel('unavailable') ]]</option>
+                  <option value="unassigned">[[ stateLabel('unassigned') ]]</option>
+                  <option v-for="s in laneStudents" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-
-      <sync-note v-if="sync && syncWhere === 'grid'" v-bind:s="sync" v-on:dismiss="sync = null"></sync-note>
-
-      <!-- Raised by the edit that caused it, not armed beforehand: the plan
-           and the committed roster now disagree about one cell, so say so
-           while the overseer is still looking at the change they just made. -->
-      <divergence-note v-if="divergence" v-bind:d="divergence" v-bind:busy="busy"
-                       v-on:apply="applyReconcile" v-on:dismiss="divergence = null"></divergence-note>
-      <override-note v-if="rosterOverride" v-bind:o="rosterOverride"
-                     v-on:dismiss="rosterOverride = null"></override-note>
-
-      <template v-if="regularSlots.length">
-        <template v-for="(week, wi) in weeks" v-bind:key="wi">
-          <div class="weeklabel">Week [[ wi + 1 ]] <span class="hint">[[ week[0].slice(5) ]] – [[ week[week.length - 1].slice(5) ]]</span></div>
-          <div class="weekwrap">
-            <table class="grid">
-              <thead>
-                <tr>
-                  <th class="h">時 / hr</th>
-                  <th v-for="d in week" v-bind:key="d" v-bind:class="dayHeadClass(d)"
-                      v-bind:title="dayTitle(d)">
-                    [[ weekdayLabel(d) ]]<br>[[ d.slice(5) ]]
-                    <div class="day-tag" v-if="isClosedDay(d)">closed</div>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="h in HOURS" v-bind:key="h">
-                  <td class="h mono">[[ hourLabel(h) ]]</td>
-                  <td v-for="d in week" v-bind:key="d + '_' + h"
-                      class="reg-cell" v-bind:class="regularCellClass(d, h)"
-                      v-bind:style="regularCellStyle(d, h)">
-                    <!-- In the unpaid lane most cells have no row at all,
-                         and "none" is a real answer there, so the select is
-                         always offered rather than only where a row exists. -->
-                    <select v-if="isEditableDay(d) && (regularRow(d, h) || lane !== 'OW')"
-                            v-bind:value="regularCellValue(d, h)"
-                            v-on:change="onRegularCellChange(d, h, $event.target.value)">
-                      <option value="none" v-if="lane !== 'OW'">none</option>
-                      <option value="unavailable">[[ stateLabel('unavailable') ]]</option>
-                      <option value="unassigned">[[ stateLabel('unassigned') ]]</option>
-                      <option v-for="s in laneStudents" v-bind:key="s.id" v-bind:value="'assigned:' + s.id">[[ studentLabel(s) ]]</option>
-                    </select>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-      </template>
-      <p class="hint" v-else style="margin-top:10px;">Not populated yet for this month — click "Populate from template" above.</p>
     </template>
   </div>
+
+  <!-- ============ Manual overrides ============ -->
+  <!-- The cycle runs itself (times open and close selection, /tick starts the
+       month). This is the way out when it needs correcting by hand — kept, but
+       out of the way, because it is not part of a normal month. -->
+  <details class="panel" v-if="monthId">
+    <summary>Manual overrides 手動調整</summary>
+    <div class="field-row" style="margin-top:4px;">
+      <div class="field" style="max-width:260px;"><label>Month state 狀態</label>
+        <select v-bind:value="currentMonthState" v-bind:disabled="busy"
+                v-on:change="setMonthState($event.target.value)">
+          <option v-for="s in MONTH_STATES" v-bind:key="s" v-bind:value="s">[[ s ]][[ s === forwardStep ? '  (usual next step)' : '' ]]</option>
+        </select>
+      </div>
+      <div class="field" style="align-self:end; flex:0 0 auto; min-width:0;" v-if="regularSlots.length && beforeCommit">
+        <button class="secondary" v-bind:disabled="busy || !staleCount" v-on:click="resyncMonth">
+          Re-apply template to [[ currentMonthYm ]][[ staleCount ? ' (' + staleCount + ' differ)' : '' ]]</button>
+      </div>
+    </div>
+    <p class="hint" v-if="guide">[[ STATE_HELP[currentMonthState] ]]</p>
+    <p class="hint" v-if="overrideMessage">[[ overrideMessage ]]
+      <a v-if="currentMonthState === 'closed'" v-bind:href="'/report?month=' + monthId">Month report</a></p>
+  </details>
 </div>
 {% endblock %}
 {% block page_script %}
@@ -345,16 +238,6 @@ const { createApp } = Vue;
 const HOURS = [8, 9, 10, 11, 13, 14, 15, 16];
 const WEEKDAYS = [0, 1, 2, 3, 4];
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-// [label, badge class] per day status in the day-by-day report. "Scheduled"
-// is a future shift, not a miss — a month in progress is mostly those.
-const DETAIL_STATUS = {
-  recorded:    ["Worked", "ok"],
-  partial:     ["Part only", "warn"],
-  no_show:     ["No show", "warn"],
-  leave:       ["Leave", "uncovered"],
-  unscheduled: ["Not scheduled", "warn"],
-  scheduled:   ["Upcoming", "uncovered"],
-};
 
 const MONTH_STATES = ["setup", "selection_open", "selection_closed",
                       "review", "committed", "running", "closed"];
@@ -366,36 +249,49 @@ const MONTH_FORWARD = {
 // What each state actually gates — kept in step with the backend checks so
 // the dropdown isn't a list of opaque words.
 const STATE_HELP = {
-  setup: "Nothing is open to students. Set closed dates and the pattern, then build slots.",
-  selection_open: "Students can pick hours. This state alone decides that — the scheduled times below only move it for you.",
-  selection_closed: "Students are locked out. Generate the draft from the Draft page; that moves the month to review.",
-  review: "You're editing the draft grid. Commit from the Draft page when it looks right.",
-  committed: "Published — students see their shifts and the roster notification has fired. Moves to running on its own once the month starts.",
+  setup: "Nothing is open to students yet.",
+  selection_open: "Students can pick hours. This state alone decides that — the times only move it for you.",
+  selection_closed: "Students are locked out. Generate the draft on the Commit tab; that moves the month to review.",
+  review: "The draft is being checked. Commit when it looks right.",
+  committed: "Published — students see their shifts. Moves to running on its own once the month starts.",
   running: "The month is live: sign-in, leave, and no-show detection all active.",
-  closed: "Finished. Selecting this generates the close-out report below.",
+  closed: "Finished.",
   draft: "Legacy state — nothing uses it. Move to review.",
 };
+const STAGE_GUIDE = {
+  populate: "Copies the weekly template into this month and builds the hours students pick from.",
+  commit: "Every change to the grids saves as you make it, and reaches students' selection straight away. Once selection closes, the schedule is checked and committed on the Commit tab.",
+  recommit: "Carries edits made to this month's grid through to the live roster. Silent — nobody is notified.",
+};
+const GUIDE_KEY = "oia.guide";
 
 const app = createApp({
   delimiters: ['[[', ']]'],
   data() {
+    let guide = false;
+    try { guide = localStorage.getItem(GUIDE_KEY) === "1"; } catch (e) { /* private window */ }
     return {
       students: [], months: [], monthId: null,
       template: [], regularSlots: [],
-      HOURS, WEEKDAYS, WEEKDAY_LABELS, MONTH_STATES, STATE_HELP,
-      busy: false, populateMessage: "", narrow: false, monthMessage: "",
-      newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
-      swOpens: "", swCloses: "", genMessage: "",
-      window: null, slotCount: null, closeout: null, reportMessage: "",
+      HOURS, WEEKDAYS, WEEKDAY_LABELS, MONTH_STATES, STATE_HELP, STAGE_GUIDE,
+      busy: false, narrow: false, guide,
+      monthMessage: "", datesMessage: "", timesMessage: "", actionMessage: "", overrideMessage: "",
+      addingMonth: false, newMonthYm: "", closedDates: [], newClosedDate: { date: "", reason: "" },
+      swOpens: "", swCloses: "", window: null,
       lane: "OW", LANE_ORDER: OIA.LANE_ORDER, LANE_LABELS: OIA.LANE_LABELS,
-      detail: null, detailOnlyFlagged: false, DETAIL_STATUS,
+      // Status of the month's latest schedule: null (none), "draft" or
+      // "committed". With whether the month has plan rows, this picks the
+      // one action on offer.
+      scheduleStatus: null,
       // The last slot sync's summary, and which panel's action produced it
       // (so it shows next to the thing that was just changed).
       sync: null, syncWhere: null,
-      // A grid edit changed the plan but left the committed roster saying
-      // something else: `divergence` is the offer to reconcile that one cell,
-      // `rosterOverride` is what reconciling actually did. Neither notifies.
-      divergence: null, rosterOverride: null,
+      // Grid edits that changed the plan but left the committed roster saying
+      // something else — one entry per cell, applied by Recommit. Only the
+      // edits themselves are listed: the roster differs from the plan by
+      // design wherever the solver filled an hour, so "everything that
+      // differs" would undo the solver's work.
+      pending: [], recommitResult: null,
     };
   },
   computed: {
@@ -423,21 +319,6 @@ const app = createApp({
     // A lane is the worker type, so only that lane's students can be named
     // in it — same rule the server enforces.
     laneStudents() { return this.students.filter(s => OIA.laneOf(s) === this.lane); },
-    // "Needing attention" is every day that isn't a shift worked as planned:
-    // a gap, an unplanned sign-in, leave, or a flag. Filtering to these is
-    // what makes a month of day-records usable.
-    detailShown() {
-      if (!this.detail) return [];
-      if (!this.detailOnlyFlagged) return this.detail;
-      const interesting = d =>
-        d.status !== "recorded" && d.status !== "scheduled" || d.flag_reason || d.leave.length;
-      return this.detail
-        .map(r => Object.assign({}, r, { days: r.days.filter(interesting) }))
-        .filter(r => r.days.length);
-    },
-    detailDayCount() {
-      return this.detailShown.reduce((n, r) => n + r.days.length, 0);
-    },
     // Every week of the month as a full Mon-Fri, so the grid keeps the same
     // five columns. Days from the neighbouring month are drawn greyed and
     // blank; closed days are shown greyed too, but not editable — editing a
@@ -455,11 +336,34 @@ const app = createApp({
       return m ? m.year_month : "";
     },
     forwardStep() { return MONTH_FORWARD[this.currentMonthState] || null; },
-    // One gate now: the state alone. Mirrors availability._window_is_open.
-    selectionOpen() { return this.currentMonthState === "selection_open"; },
+    inSetup() { return this.currentMonthState === "setup"; },
+    pastSelection() { return !this.inSetup && this.currentMonthState !== "selection_open"; },
+    beforeCommit() { return this.scheduleStatus !== "committed"; },
+    stage() {
+      if (!this.regularSlots.length) return "populate";
+      return this.beforeCommit ? "commit" : "recommit";
+    },
+    // Why the button is or isn't ready — state, not instructions.
+    stageStatus() {
+      if (this.stage === "populate") return "";
+      if (this.stage === "recommit") {
+        return this.applicable.length ? "" : "Committed — no changes waiting.";
+      }
+      if (this.inSetup) {
+        return this.window ? "Saved. Selection opens " + this.formatDateTime(this.window.opens_at) + "."
+                           : "Saved. Set the selection times above.";
+      }
+      if (this.currentMonthState === "selection_open") {
+        return "Students are selecting" +
+          (this.window ? " — closes " + this.formatDateTime(this.window.closes_at) + "." : ".");
+      }
+      return "Selection closed — check and commit on";
+    },
+    // Taking a declared, committed hour off a student is the leave flow's
+    // job, so those are listed but never applied from here.
+    applicable() { return this.pending.filter(d => !this.isBlocked(d)); },
     // How many of this month's cells disagree with the master template —
-    // i.e. what a re-sync would change. This is the number that was invisible
-    // before, so template edits looked like they had silently done nothing.
+    // i.e. what re-applying the template would change.
     staleCount() {
       if (!this.regularSlots.length || !this.template.length) return 0;
       let n = 0;
@@ -479,10 +383,14 @@ const app = createApp({
   },
   watch: {
     async monthId() {
-      this.populateMessage = ""; this.genMessage = "";
-      if (!this.monthId) { this.regularSlots = []; this.closedDates = []; return; }
-      this.regularSlots = await OIA.api.get("/api/admin/months/" + this.monthId + "/regular-slots");
-      await this.loadMonthDetail();
+      this.monthMessage = this.datesMessage = this.timesMessage = "";
+      this.actionMessage = this.overrideMessage = "";
+      this.pending = []; this.recommitResult = null; this.sync = null;
+      if (!this.monthId) { this.regularSlots = []; this.closedDates = []; this.scheduleStatus = null; return; }
+      await Promise.all([this.reloadRegularSlots(), this.loadMonthDetail(), this.loadSchedule()]);
+    },
+    guide(on) {
+      try { localStorage.setItem(GUIDE_KEY, on ? "1" : "0"); } catch (e) { /* private window */ }
     },
   },
   async mounted() {
@@ -499,6 +407,10 @@ const app = createApp({
     studentLabel(s) {
       const name = s.english_name || s.chinese_name;
       return this.narrow ? OIA.shortName(name) : name;
+    },
+    // "2026-09-25T17:00:00" -> "Fri 09-25 17:00"
+    formatDateTime(iso) {
+      return OIA.weekdayLabel(iso.slice(0, 10)) + " " + iso.slice(5, 10) + " " + iso.slice(11, 16);
     },
 
     templateRow(wd, h) { return this.templateByKey[wd + "_" + h]; },
@@ -571,22 +483,22 @@ const app = createApp({
     },
     async onRegularCellChange(d, h, value) {
       const row = this.regularRow(d, h);
+      const cell = { date: d, hour: h, track: this.lane };
       const [state, studentIdStr] = value.split(":");
       const studentId = studentIdStr ? Number(studentIdStr) : null;
+      this.recommitResult = null;
 
       // "none" removes the cell from this lane for this month — not the same
       // as unavailable, which in the opt-in lane would say the same thing
       // twice, and in the paid one means something else entirely.
-      this.rosterOverride = null;
-
       if (value === "none") {
         if (!row) return;
         const res = await this.withLossConfirm(confirmed => OIA.api.del(
           "/api/admin/regular-slots/" + row.id + (confirmed ? "?confirm=true" : "")));
         if (res === null) { await this.reloadRegularSlots(); return; }
         this.regularSlots = this.regularSlots.filter(r => r.id !== row.id);
-        await this.showSync(res.slot_sync, "grid");
-        this.divergence = res.roster_divergence || null;
+        this.showSync(res.slot_sync, "grid");
+        this.setPending(cell, res.roster_divergence);
         return;
       }
 
@@ -599,36 +511,50 @@ const app = createApp({
       if (updated === null) { await this.reloadRegularSlots(); return; }
       this.regularSlots = this.regularSlots
         .filter(r => r.id !== updated.id).concat([updated]);
-      await this.showSync(updated.slot_sync, "grid");
-      this.divergence = updated.roster_divergence || null;
+      this.showSync(updated.slot_sync, "grid");
+      this.setPending(cell, updated.roster_divergence);
     },
 
-    // Carry the edit the overseer just made through to the committed roster.
-    // Only reachable from the divergence prompt, so there is always a specific
-    // cell and a visible reason for it.
-    async applyReconcile() {
-      const d = this.divergence;
-      if (!d) return;
-      this.busy = true;
+    pendingKey(d) { return d.date + "_" + d.hour + "_" + d.track; },
+    isBlocked(d) { return d.blocked_by === "offered_and_committed"; },
+    // The server says, after each edit, whether the committed roster now
+    // disagrees about that cell. Editing a cell back clears its entry.
+    setPending(cell, divergence) {
+      const key = this.pendingKey(cell);
+      this.pending = this.pending.filter(d => this.pendingKey(d) !== key);
+      if (divergence) this.pending.push(divergence);
+    },
+    dropPending(d) { this.setPending(d, null); },
+
+    // Carry the edits made since commit through to the committed roster, one
+    // cell at a time. Silent by design — these are corrections, not news.
+    async recommit() {
+      this.busy = true; this.recommitResult = null; this.actionMessage = "";
+      const lines = [], notOffered = [];
+      const at = r => r.date.slice(5) + " " + r.hour + ":00";
       try {
-        const res = await OIA.api.post(
-          "/api/admin/months/" + this.monthId + "/reconcile-cell",
-          { date: d.date, hour: d.hour, track: d.track });
-        this.divergence = null;
-        this.rosterOverride = res;
-        await this.showSync(res.slot_sync, "grid");
-        await this.loadSlotCount();
-      } catch (e) {
-        // Refused server-side — the hour became a protected one between the
-        // edit and the click (someone claimed it, or availability arrived).
-        // Re-show the prompt in its blocked form rather than dropping the
-        // error on the floor.
-        if (e.payload && e.payload.divergence) {
-          this.divergence = e.payload.divergence;
-        } else {
-          this.divergence = Object.assign({}, d, { blocked_by: "offered_and_committed" });
+        for (const d of this.applicable.slice()) {
+          try {
+            const res = await OIA.api.post(
+              "/api/admin/months/" + this.monthId + "/reconcile-cell",
+              { date: d.date, hour: d.hour, track: d.track });
+            (res.released || []).forEach(
+              r => lines.push("removed " + (r.student || "nobody") + " from " + at(r)));
+            if (res.claimed) {
+              lines.push("put " + res.claimed.student + " on " + at(res.claimed));
+              if (!res.claimed.offered_the_hour) notOffered.push(res.claimed.student);
+            }
+            this.dropPending(d);
+            this.showSync(res.slot_sync, "grid");
+          } catch (e) {
+            // Refused server-side — the hour became a protected one between
+            // the edit and the click (someone claimed it, or availability
+            // arrived). Keep it listed in its blocked form.
+            if (e.payload && e.payload.divergence) this.setPending(d, e.payload.divergence);
+            else this.actionMessage = e.message;
+          }
         }
-        await this.reloadRegularSlots();
+        this.recommitResult = { lines, notOffered };
       } finally {
         this.busy = false;
       }
@@ -636,35 +562,51 @@ const app = createApp({
     // A plan change came back with a slot-sync summary (null when the month
     // has no slots yet, i.e. nothing to sync). Only shown when it did
     // something, or when something was held back.
-    async showSync(summary, where) {
+    showSync(summary, where) {
       if (!summary) return;
       if (summary.created || summary.removed || summary.kept.length) {
         this.sync = summary;
         this.syncWhere = where;
       }
-      if (summary.created || summary.removed) await this.loadSlotCount();
     },
 
-    async populateMonth(resync) {
-      if (resync && this.staleCount &&
-          !confirm("Re-sync overwrites " + this.staleCount + " cell(s) in " + this.currentMonthYm +
-                   " with the master template, discarding any one-off edits made for this month. Continue?")) {
-        return;
-      }
-      this.busy = true; this.populateMessage = "";
+    // Template -> this month's plan -> the slots students tick, in one go.
+    // These were two buttons; nothing useful happens between them.
+    async populateMonth() {
+      this.busy = true; this.actionMessage = "";
       try {
         const res = await this.withLossConfirm(confirmed => OIA.api.post(
           "/api/admin/months/" + this.monthId + "/regular-slots/populate",
-          { resync: !!resync, confirm: confirmed }));
-        if (res === null) { this.populateMessage = "Cancelled — nothing changed."; return; }
-        this.populateMessage = resync
-          ? "Added " + res.created + ", updated " + res.updated + " cell(s) from the template."
-          : "Added " + res.created + " missing cell(s)." +
-            (this.staleCount ? " " + this.staleCount + " still differ — use Re-sync to apply those." : "");
-        this.regularSlots = await OIA.api.get("/api/admin/months/" + this.monthId + "/regular-slots");
-        await this.showSync(res.slot_sync, "grid");
+          { resync: false, confirm: confirmed }));
+        if (res === null) { this.actionMessage = "Cancelled — nothing changed."; return; }
+        await this.reloadRegularSlots();
+        const built = await this.withLossConfirm(confirmed => OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/generate-slots" + (confirmed ? "?confirm=true" : "")));
+        this.actionMessage = "Populated — " + res.created + " cells" +
+          (built ? ", " + built.created + " slots built." : ". Slots not built.");
+        if (built) this.showSync(built, "build");
       } catch (e) {
-        this.populateMessage = e.message;
+        this.actionMessage = (e.payload && e.payload.message) || e.message;
+      } finally { this.busy = false; }
+    },
+    // Overwrite this month's plan from the template. Discards per-month
+    // exceptions, which is why it lives under Manual overrides.
+    async resyncMonth() {
+      if (!confirm("Overwrite " + this.staleCount + " cell(s) in " + this.currentMonthYm +
+                   " with the template, discarding any one-off edits made for this month?")) {
+        return;
+      }
+      this.busy = true; this.overrideMessage = "";
+      try {
+        const res = await this.withLossConfirm(confirmed => OIA.api.post(
+          "/api/admin/months/" + this.monthId + "/regular-slots/populate",
+          { resync: true, confirm: confirmed }));
+        if (res === null) { this.overrideMessage = "Cancelled — nothing changed."; return; }
+        this.overrideMessage = "Added " + res.created + ", updated " + res.updated + " cell(s) from the template.";
+        await this.reloadRegularSlots();
+        this.showSync(res.slot_sync, "grid");
+      } catch (e) {
+        this.overrideMessage = e.message;
       } finally { this.busy = false; }
     },
 
@@ -679,17 +621,20 @@ const app = createApp({
       this.window = sw;
       this.swOpens = sw ? sw.opens_at.slice(0, 16) : "";
       this.swCloses = sw ? sw.closes_at.slice(0, 16) : "";
-      await this.loadSlotCount();
     },
-    async loadSlotCount() {
-      const grid = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/grid");
-      this.slotCount = grid.slots.length;
+    async loadSchedule() {
+      const payload = await OIA.api.get("/api/schedule/months/" + this.monthId);
+      this.scheduleStatus = payload ? payload.schedule.status : null;
+    },
+    async reloadRegularSlots() {
+      this.regularSlots = await OIA.api.get(
+        "/api/admin/months/" + this.monthId + "/regular-slots");
     },
     async createMonth() {
       this.busy = true; this.monthMessage = "";
       try {
         const m = await OIA.api.post("/api/admin/months", { year_month: this.newMonthYm });
-        this.newMonthYm = "";
+        this.newMonthYm = ""; this.addingMonth = false;
         await this.loadMonths();
         this.monthId = m.id;
       } catch (e) {
@@ -698,111 +643,66 @@ const app = createApp({
           : e.message;
       } finally { this.busy = false; }
     },
-    // Fetched on demand, not with the report: a month of day-records is a
-    // lot of rows and only wanted when somebody goes looking.
-    async toggleDetail() {
-      if (this.detail) { this.detail = null; return; }
-      this.busy = true;
-      try {
-        this.detail = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/detail");
-      } catch (e) {
-        this.reportMessage = e.message;
-      } finally { this.busy = false; }
-    },
-    async showReport() {
-      // Same build_month_dashboard() the close-out uses — pulling it up early
-      // doesn't close the month or change anything.
-      this.busy = true; this.reportMessage = "";
-      try {
-        this.closeout = await OIA.api.get("/api/dashboard/months/" + this.monthId);
-      } catch (e) {
-        this.monthMessage = e.message;
-      } finally { this.busy = false; }
-    },
-    printReport() { window.print(); },
-    async postReportToLine() {
-      if (!confirm("Post the " + this.currentMonthYm + " hours summary to the student group?")) return;
-      this.busy = true; this.reportMessage = "";
-      try {
-        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/report/notify", {});
-        this.reportMessage = res.sent
-          ? "Posted to the group."
-          : "Already posted for " + this.currentMonthYm + " — not sent again.";
-      } catch (e) {
-        this.reportMessage = "Could not post: " + e.message;
-      } finally { this.busy = false; }
-    },
     async setMonthState(state) {
-      if (state === "closed" && !confirm(
-          "Close " + this.currentMonthYm + "? This produces the close-out report and ends the month.")) {
+      if (state === "closed" && !confirm("Close " + this.currentMonthYm + "? This ends the month.")) {
         await this.loadMonths();  // snap the <select> back to the real state
         return;
       }
-      this.busy = true; this.monthMessage = ""; this.closeout = null;
+      this.busy = true; this.overrideMessage = "";
       try {
         const res = await OIA.api.patch("/api/admin/months/" + this.monthId, { state });
         await this.loadMonths();
-        if (res.closeout_report) {
-          this.closeout = res.closeout_report;
-          this.monthMessage = "Month closed — close-out report below.";
-        } else {
-          this.monthMessage = res.was_forward_step
-            ? "Now " + res.state + "."
-            : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
-        }
+        this.overrideMessage = state === "closed" ? "Month closed."
+          : res.was_forward_step ? "Now " + res.state + "."
+          : "Moved " + res.previous_state + " → " + res.state + " (not the usual next step).";
         if (res.slots_built) {
-          this.monthMessage += " No slots existed yet, so " + res.slots_built.created +
+          this.overrideMessage += " No slots existed yet, so " + res.slots_built.created +
             " were built from the plan first.";
-          await this.loadSlotCount();
         }
       } catch (e) {
-        this.monthMessage = e.message;
+        this.overrideMessage = e.message;
         await this.loadMonths();
       } finally { this.busy = false; }
     },
     async addClosedDate() {
-      this.monthMessage = "";
+      this.datesMessage = "";
       try {
         const res = await this.withLossConfirm(confirmed => OIA.api.post(
           "/api/admin/months/" + this.monthId + "/closed-dates",
           Object.assign({}, this.newClosedDate, { confirm: confirmed })));
-        if (res === null) { this.monthMessage = "Cancelled — nothing changed."; return; }
+        if (res === null) { this.datesMessage = "Cancelled — nothing changed."; return; }
         this.newClosedDate = { date: "", reason: "" };
         await this.loadMonthDetail();
-        await this.showSync(res.slot_sync, "setup");
+        this.showSync(res.slot_sync, "setup");
       } catch (e) {
-        this.monthMessage = e.message === "date_already_closed"
+        this.datesMessage = e.message === "date_already_closed"
           ? "That date is already closed." : e.message;
       }
     },
     async removeClosedDate(id) {
-      this.monthMessage = "";
+      this.datesMessage = "";
       try {
         const res = await this.withLossConfirm(confirmed => OIA.api.del(
           "/api/admin/closed-dates/" + id + (confirmed ? "?confirm=true" : "")));
         if (res === null) return;
         await this.loadMonthDetail();
-        await this.showSync(res.slot_sync, "setup");
-      } catch (e) { this.monthMessage = e.message; }
+        this.showSync(res.slot_sync, "setup");
+      } catch (e) { this.datesMessage = e.message; }
     },
     async saveSelectionWindow() {
-      this.monthMessage = "";
-      if (!this.swOpens || !this.swCloses) { this.monthMessage = "Set both dates."; return; }
+      this.timesMessage = "";
+      if (!this.swOpens || !this.swCloses) { this.timesMessage = "Set both times."; return; }
       try {
         await OIA.api.put("/api/admin/months/" + this.monthId + "/selection-window", { opens_at: this.swOpens, closes_at: this.swCloses });
         await this.loadMonthDetail();
-        this.monthMessage = "Selection window saved.";
-      } catch (e) { this.monthMessage = e.message; }
+        this.timesMessage = "Saved.";
+      } catch (e) { this.timesMessage = e.message; }
     },
     // A plan change that would take saved hours off more than a couple of
     // students is refused by the server with nothing committed. Show exactly
     // whose hours would go, and only retry if the overseer says so — losing a
     // month of student answers is the thing this guard exists to prevent, so
     // it must never happen on one click.
-    async reloadRegularSlots() {
-      this.regularSlots = await OIA.api.get(
-        "/api/admin/months/" + this.monthId + "/regular-slots");
-    },
     async withLossConfirm(run) {
       try {
         return await run(false);
@@ -816,21 +716,6 @@ const app = createApp({
         if (!ok) return null;
         return await run(true);
       }
-    },
-    async generateSlots() {
-      this.busy = true; this.genMessage = "";
-      try {
-        const res = await this.withLossConfirm(confirmed => OIA.api.post(
-          "/api/admin/months/" + this.monthId + "/generate-slots" + (confirmed ? "?confirm=true" : "")));
-        if (res === null) { this.genMessage = "Cancelled — nothing changed."; return; }
-        await this.loadSlotCount();
-        if (!res.created && !res.removed && !res.kept.length) {
-          this.genMessage = "Slots already match the plan — nothing to change.";
-        }
-        await this.showSync(res, "build");
-      } catch (e) {
-        this.genMessage = (e.payload && e.payload.message) || e.message;
-      } finally { this.busy = false; }
     },
   },
 });
@@ -863,88 +748,11 @@ app.component("sync-note", {
       <strong v-text="headline"></strong>
       <span v-if="s.lost_picks.length" v-text="lostText"></span>
       <div v-if="s.kept.length" style="flex-basis:100%;">
-        Kept, because they're in use — sort these out first (e.g. change the assignment on the
-        Draft page), then click Update slots:
+        Kept, because they're in use:
         <ul style="padding-left:18px; margin-top:4px;">
           <li v-for="k in s.kept" :key="k.date + '_' + k.hour" class="mono" v-text="keptText(k)"></li>
         </ul>
       </div>
-      <button class="secondary" type="button" @click="$emit('dismiss')">Dismiss</button>
-    </div>`,
-});
-
-// The plan and the committed roster disagree about one cell. Raised by the
-// edit that caused it, so the overseer decides with the change in front of
-// them — rather than arming a mode first and silently losing the change when
-// they forget, which is how a student stayed on the wrong day for five weeks.
-app.component("divergence-note", {
-  props: { d: { type: Object, required: true }, busy: Boolean },
-  emits: ["apply", "dismiss"],
-  computed: {
-    cell() { return this.d.date.slice(5) + " " + this.d.hour + ":00 (" + this.d.track + ")"; },
-    headline() {
-      if (this.d.action === "add") {
-        return "The roster has nobody on " + this.cell + ", but the plan now says "
-               + this.d.planned_student + ".";
-      }
-      if (this.d.action === "remove") {
-        return "The roster still has " + this.d.roster_student + " on " + this.cell
-               + ", but the plan no longer does.";
-      }
-      return "The roster has " + this.d.roster_student + " on " + this.cell
-             + ", but the plan now says " + this.d.planned_student + ".";
-    },
-    // Adding is free; taking a declared, committed hour off a student is the
-    // leave flow's job, so the button isn't offered for it.
-    blocked() { return this.d.blocked_by === "offered_and_committed"; },
-  },
-  template: `
-    <div class="statusline" :class="blocked ? 'is-shut' : 'is-open'" style="margin-top:10px;">
-      <strong v-text="headline"></strong>
-      <span v-if="blocked">
-        <b v-text="d.roster_student"></b> offered that hour and is committed to it, so it's
-        theirs — take them off through <b>Leave</b> instead, so it goes through approval and
-        the hour reopens for someone else. The plan change above stands either way.
-      </span>
-      <span v-else>Applying this changes the live schedule without reopening the month,
-        and sends nothing to anyone.</span>
-      <button v-if="!blocked" type="button" :disabled="busy" @click="$emit('apply')">
-        Apply to the committed roster</button>
-      <button class="secondary" type="button" @click="$emit('dismiss')">
-        <span v-if="blocked">OK</span><span v-else>Leave as a plan change</span></button>
-    </div>`,
-});
-
-// What reconciling actually did. It always says nothing was sent: the quota is
-// small and the point of this path is that a correction is silent, so the
-// screen states it rather than leaving the overseer to wonder.
-app.component("override-note", {
-  props: { o: { type: Object, required: true } },
-  emits: ["dismiss"],
-  computed: {
-    lines() {
-      const out = (this.o.released || []).map(
-        r => "removed " + (r.student || "nobody") + " from " + r.date.slice(5) + " " + r.hour + ":00");
-      if (this.o.claimed) {
-        out.push("put " + this.o.claimed.student + " on "
-                 + this.o.claimed.date.slice(5) + " " + this.o.claimed.hour + ":00");
-      }
-      return out;
-    },
-    // Worth saying out loud rather than silently allowing: a standing grid
-    // cell may name someone who never offered that hour this month.
-    notOffered() {
-      return this.o.claimed && !this.o.claimed.offered_the_hour ? this.o.claimed.student : null;
-    },
-  },
-  template: `
-    <div class="statusline is-open" style="margin-top:10px;">
-      <strong v-if="lines.length">Committed roster updated — <span v-text="lines.join('; ')"></span>.</strong>
-      <strong v-else>Committed roster already agreed with the plan — nothing to change.</strong>
-      <span>No message was sent.</span>
-      <span v-if="notOffered">
-        Note: <b v-text="notOffered"></b> didn't offer that hour this month.
-      </span>
       <button class="secondary" type="button" @click="$emit('dismiss')">Dismiss</button>
     </div>`,
 });

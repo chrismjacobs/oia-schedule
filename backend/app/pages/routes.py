@@ -63,6 +63,12 @@ def regular_schedule_page():
     return render_template("regular_schedule.html", active_nav="regular-schedule", wide_page=True)
 
 
+@bp.get("/report")
+@page_overseer_required
+def report_page():
+    return render_template("report.html", active_nav="report", wide_page=True)
+
+
 @bp.get("/student-history")
 @page_overseer_required
 def student_history_page():

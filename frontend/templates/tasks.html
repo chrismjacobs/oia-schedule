@@ -10,13 +10,15 @@
         <h3>Regular tasks 例行任務</h3>
         <div class="table-scroll">
           <table class="data">
-            <thead><tr><th>Title</th><th>Details</th><th>Frequency</th><th>Active</th><th>Photo</th><th></th></tr></thead>
+            <thead><tr><th>Title</th><th>Details</th><th>Frequency</th><th>Done this month</th><th>Last done</th><th>Active</th><th>Photo</th><th></th></tr></thead>
             <tbody>
               <template v-for="rt in regular" v-bind:key="rt.id">
                 <tr>
                   <td>[[ rt.title_zh ]] <span v-if="rt.title_en">/ [[ rt.title_en ]]</span></td>
                   <td class="hint desc-cell">[[ rt.description || '—' ]]</td>
                   <td>[[ rt.frequency ]] (every [[ rt.interval ]])</td>
+                  <td class="mono">[[ rt.completions_this_month ]]</td>
+                  <td class="mono hint">[[ rt.last_done_at ? rt.last_done_at.slice(5, 10) + ' · ' + (rt.last_done_by || '?') : '—' ]]</td>
                   <td>[[ rt.is_active ? 'yes' : 'no' ]]</td>
                   <td>[[ rt.photo_required ? 'required' : (rt.reference_s3_key ? 'reference set' : '—') ]]</td>
                   <td class="row-actions">
@@ -27,7 +29,7 @@
                   </td>
                 </tr>
                 <tr v-if="editing.regular === rt.id">
-                  <td colspan="6" class="edit-row">
+                  <td colspan="8" class="edit-row">
                     <form v-on:submit.prevent="saveRegular">
                       <div class="field-row">
                         <div class="field"><label>ZH title 中文</label><input v-model="draftRegular.title_zh" required></div>

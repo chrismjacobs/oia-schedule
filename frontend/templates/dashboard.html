@@ -3,7 +3,7 @@
 {% block content %}
 <div id="dash-app" v-cloak>
   <!-- While a month is open for selection: who has answered, at a glance.
-       The full breakdown is at the top of Draft review. -->
+       The full breakdown is at the top of the Commit tab. -->
   <a class="statusline" v-if="selection" v-bind:href="'/draft?month=' + selection.month.id"
      v-bind:class="selection.summary.not_answered ? 'is-shut' : 'is-open'"
      style="margin:10px 16px 0; text-decoration:none;">
@@ -11,7 +11,7 @@
       of [[ selection.summary.students ]] answered</strong>
     <span v-if="selection.summary.not_answered">· [[ selection.summary.not_answered ]] not yet</span>
     <span v-if="selection.summary.regular_need_cover">· [[ selection.summary.regular_need_cover ]] regular hour(s) need cover</span>
-    <span>→ Draft review</span>
+    <span>→ Commit</span>
   </a>
   <div class="panel" style="margin-top:10px;">
     <h2>Students 學生</h2>
@@ -252,51 +252,8 @@
       </div>
     </div>
 
-    <div class="panel">
-      <h2>Scheduled vs Recorded <span class="hint">排班 vs 實際出勤</span></h2>
-      <div class="table-scroll">
-        <table class="data">
-          <thead><tr><th></th><th>Scheduled</th><th>Recorded</th><th>Gap</th></tr></thead>
-          <tbody>
-            <tr v-for="row in data.gap" v-bind:key="row.student_id">
-              <td>[[ studentLabel(row) ]]</td>
-              <td class="mono">[[ row.scheduled_hours ]]</td>
-              <td class="mono">[[ row.recorded_hours ]]</td>
-              <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>Leave patterns <span class="hint">請假頻繁 / 過晚</span></h2>
-      <p class="hint" v-if="!data.leave_patterns.too_often.length && !data.leave_patterns.too_late.length">None</p>
-      <ul v-else style="padding-left:18px;">
-        <li v-for="row in data.leave_patterns.too_often" v-bind:key="'often-'+row.student_id">
-          Too often: student #[[ row.student_id ]] — [[ row.count ]]x
-        </li>
-        <li v-for="row in data.leave_patterns.too_late" v-bind:key="'late-'+row.leave_request.id">
-          Too late: student #[[ row.student_id ]] — [[ row.leave_request.lead_time_hours ]]h notice
-        </li>
-      </ul>
-    </div>
-
-    <div class="panel">
-      <h2>Task completion <span class="hint">任務完成情形</span></h2>
-      <div class="table-scroll">
-        <table class="data">
-          <thead><tr><th>Task</th><th>Completions this month</th></tr></thead>
-          <tbody>
-            <tr v-for="row in data.task_completion.regular" v-bind:key="row.task.id">
-              <td>[[ row.task.title_zh ]] <span v-if="row.task.title_en">/ [[ row.task.title_en ]]</span></td>
-              <td class="mono">[[ row.completions_this_month ]]</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="hint" style="margin-top:8px;">Custom tasks: [[ JSON.stringify(data.task_completion.custom_by_status) ]]</p>
-    </div>
+    <p class="hint" style="margin:8px 16px 0;">
+      <a v-bind:href="'/report?month=' + monthId">Full report 月報表 →</a></p>
   </template>
 </div>
 {% endblock %}
@@ -386,10 +343,6 @@ const app = createApp({
       } finally {
         this.loading = false;
       }
-    },
-    studentLabel(row) {
-      if (!row.student) return "#" + row.student_id;
-      return OIA.bilingual(row.student.chinese_name, row.student.english_name);
     },
     async loadStudents() {
       this.students = await OIA.api.get("/api/admin/students");

@@ -5,16 +5,36 @@ from flask_login import current_user
 
 from app.tasks import bp
 from app.extensions import db
-from app.models import RegularTask, CustomTask, REGULAR_TASK_FREQUENCIES
+from app.models import RegularTask, CustomTask, TaskCompletion, REGULAR_TASK_FREQUENCIES
 from app.utils.decorators import overseer_required, login_required_api
+from app.utils.tz import local_now
 from app.utils.s3 import upload_object, presigned_view_url
 
 
 @bp.get("/regular")
 @overseer_required
 def list_regular():
+    """The overseer's task list, each with how it's actually going: how many
+    times it's been done this calendar month, and who did it last. Shown
+    beside the task itself rather than on the dashboard — "is the fridge
+    getting done?" is asked while looking at the fridge task."""
     rows = RegularTask.query.order_by(RegularTask.title_en).all()
-    return jsonify([r.to_dict() for r in rows])
+    month_start = local_now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    done_this_month, last_done = {}, {}
+    for tc in TaskCompletion.query.order_by(TaskCompletion.completed_at).all():
+        last_done[tc.regular_task_id] = tc   # ordered, so the latest wins
+        if tc.completed_at >= month_start:
+            done_this_month[tc.regular_task_id] = done_this_month.get(tc.regular_task_id, 0) + 1
+    out = []
+    for r in rows:
+        last = last_done.get(r.id)
+        out.append(dict(
+            r.to_dict(),
+            completions_this_month=done_this_month.get(r.id, 0),
+            last_done_at=last.completed_at.isoformat() if last else None,
+            last_done_by=last.student.short_name if last and last.student else None,
+        ))
+    return jsonify(out)
 
 
 @bp.get("/regular/active")

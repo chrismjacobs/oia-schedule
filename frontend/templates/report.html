@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Month report{% endblock %}
+{% block content %}
+<div id="report-app" v-cloak>
+  <div class="panel noprint">
+    <div class="field" style="max-width:260px; margin-bottom:0;">
+      <label>Month 月份</label>
+      <select v-model.number="monthId">
+        <option v-for="m in months" v-bind:key="m.id" v-bind:value="m.id">[[ m.year_month ]] — [[ m.state ]]</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="panel" v-if="report">
+    <div class="closeout" style="margin-top:0;">
+      <h3>Month report 月報表 [[ currentMonthYm ]]</h3>
+      <div class="summary" style="margin:10px 0 0;">
+        <div class="stat"><div class="k">Coverage</div><div class="v">[[ report.coverage_pct ]]<small>%</small></div></div>
+        <div class="stat gap"><div class="k">Uncovered</div><div class="v mono">[[ report.uncovered_slots.length ]]</div></div>
+        <div class="stat gap"><div class="k">No-shows</div><div class="v mono">[[ report.no_shows.length ]]</div></div>
+        <div class="stat gap"><div class="k">Unscheduled sign-ins</div><div class="v mono">[[ report.signed_in_not_scheduled.length ]]</div></div>
+      </div>
+      <table class="data" style="margin-top:10px;">
+        <thead><tr><th>Student</th><th>Scheduled</th><th>Recorded</th><th>Gap</th><th>No-shows</th><th>Leave</th></tr></thead>
+        <tbody>
+          <tr v-for="row in report.gap" v-bind:key="row.student_id">
+            <td>[[ row.student ? (row.student.chinese_name + ' ' + row.student.english_name) : '#' + row.student_id ]]</td>
+            <td class="mono">[[ row.scheduled_hours ]]</td>
+            <td class="mono">[[ row.recorded_hours ]]</td>
+            <td class="mono"><span class="badge" v-bind:class="row.gap > 0 ? 'warn' : 'ok'">[[ row.gap ]]</span></td>
+            <td class="mono">[[ row.no_shows ]]</td>
+            <td class="mono">[[ row.leave_approved ]]</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 style="margin-top:14px;">Leave patterns 請假頻繁 / 過晚</h3>
+      <p class="hint" v-if="!report.leave_patterns.too_often.length && !report.leave_patterns.too_late.length">None</p>
+      <ul class="plainlist" v-else>
+        <li v-for="row in report.leave_patterns.too_often" v-bind:key="'often-' + row.student_id">
+          Too often: [[ studentName(row.student_id) ]] — <span class="mono">[[ row.count ]]×</span>
+        </li>
+        <li v-for="row in report.leave_patterns.too_late" v-bind:key="'late-' + row.leave_request.id">
+          Too late: [[ studentName(row.student_id) ]] — <span class="mono">[[ row.leave_request.lead_time_hours ]]h</span> notice
+        </li>
+      </ul>
+
+      <div class="detail-report" v-if="detail">
+        <h3 style="margin-top:16px;">Day by day 逐日明細</h3>
+        <div class="noprint" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:4px 0 10px;">
+          <label class="inline-check" style="margin:0;">
+            <input type="checkbox" v-model="detailOnlyFlagged"> Only days needing attention
+          </label>
+          <span class="hint">[[ detailDayCount ]] day-record[[ detailDayCount === 1 ? '' : 's' ]] shown.</span>
+        </div>
+
+        <div class="drep-student" v-for="r in detailShown" v-bind:key="r.student_id">
+          <div class="drep-head">
+            <oia-token v-bind:student="r.student" size="sm"></oia-token>
+            <strong>[[ r.student ? (r.student.chinese_name + ' ' + r.student.english_name) : '#' + r.student_id ]]</strong>
+            <span class="hint mono">scheduled [[ r.scheduled_hours ]]h · recorded [[ r.recorded_hours ]]h
+              · <span v-bind:class="r.scheduled_hours - r.recorded_hours > 0 ? 'gap-warn' : ''">gap [[ r.scheduled_hours - r.recorded_hours ]]h</span></span>
+          </div>
+          <table class="data drep">
+            <thead><tr>
+              <th>Date</th><th>Scheduled</th><th>Recorded</th><th>In / out</th>
+              <th>Status</th><th>What happened</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="d in r.days" v-bind:key="d.date">
+                <td class="mono">[[ WEEKDAY_LABELS[d.weekday] ]] [[ d.date.slice(5) ]]</td>
+                <td class="mono">[[ d.scheduled.join(', ') || '—' ]]<span class="lane-tag"
+                    v-if="d.tracks.includes('SW')">SW</span></td>
+                <td class="mono">[[ d.recorded.join(', ') || '—' ]]</td>
+                <td class="mono hint">[[ d.signed_in_at ? d.signed_in_at + '–' + (d.signed_out_at || '?') : '—' ]]</td>
+                <td><span class="badge" v-bind:class="DETAIL_STATUS[d.status][1]">[[ DETAIL_STATUS[d.status][0] ]]</span></td>
+                <td class="drep-what">
+                  <div v-if="d.missed.length" class="warn-text">missed [[ d.missed.join(', ') ]]</div>
+                  <div v-if="d.flag_reason" class="warn-text">flag: [[ d.flag_reason.replace('_', ' ') ]]</div>
+                  <div v-for="(lv, i) in d.leave" v-bind:key="i">
+                    leave ([[ lv.status ]]) [[ lv.hour ]]:00 — [[ lv.reason ]]
+                  </div>
+                  <div v-if="d.tasks.length">tasks: [[ d.tasks.join(', ') ]]</div>
+                  <div v-if="d.note" class="drep-note">[[ d.note ]]</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" v-if="!detailShown.length">Nothing to show with this filter.</p>
+      </div>
+
+      <!-- Export row: the report is never stored, so these are the only ways
+           a month's numbers leave the database. -->
+      <p class="noprint" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <a class="btn secondary" v-bind:href="'/api/admin/months/' + monthId + '/report.csv'">Download CSV</a>
+        <a class="btn secondary" v-bind:href="'/api/admin/months/' + monthId + '/report-detail.csv'">Detail CSV</a>
+        <button class="secondary" v-on:click="toggleDetail" v-bind:disabled="busy">
+          [[ detail ? 'Hide day-by-day' : 'Show day-by-day 逐日明細' ]]</button>
+        <button class="secondary" v-on:click="printReport">Print 列印</button>
+        <button class="secondary" v-on:click="postReportToLine" v-bind:disabled="busy">
+          Post to LINE 傳到群組</button>
+      </p>
+      <p class="hint noprint" v-if="message">[[ message ]]</p>
+    </div>
+  </div>
+  <div class="panel" v-else-if="message"><p class="hint">[[ message ]]</p></div>
+</div>
+{% endblock %}
+{% block page_script %}
+<script>
+const { createApp } = Vue;
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+// [label, badge class] per day status in the day-by-day report. "Scheduled"
+// is a future shift, not a miss — a month in progress is mostly those.
+const DETAIL_STATUS = {
+  recorded:    ["Worked", "ok"],
+  partial:     ["Part only", "warn"],
+  no_show:     ["No show", "warn"],
+  leave:       ["Leave", "uncovered"],
+  unscheduled: ["Not scheduled", "warn"],
+  scheduled:   ["Upcoming", "uncovered"],
+};
+
+const app = createApp({
+  delimiters: ['[[', ']]'],
+  data() {
+    return {
+      months: [], monthId: null, report: null, message: "", busy: false,
+      detail: null, detailOnlyFlagged: false, DETAIL_STATUS, WEEKDAY_LABELS,
+    };
+  },
+  computed: {
+    currentMonthYm() {
+      const m = this.months.find(m => m.id === this.monthId);
+      return m ? m.year_month : "";
+    },
+    // "Needing attention" is every day that isn't a shift worked as planned:
+    // a gap, an unplanned sign-in, leave, or a flag. Filtering to these is
+    // what makes a month of day-records usable.
+    detailShown() {
+      if (!this.detail) return [];
+      if (!this.detailOnlyFlagged) return this.detail;
+      const interesting = d =>
+        d.status !== "recorded" && d.status !== "scheduled" || d.flag_reason || d.leave.length;
+      return this.detail
+        .map(r => Object.assign({}, r, { days: r.days.filter(interesting) }))
+        .filter(r => r.days.length);
+    },
+    detailDayCount() {
+      return this.detailShown.reduce((n, r) => n + r.days.length, 0);
+    },
+  },
+  watch: { monthId() { this.loadReport(); } },
+  async mounted() {
+    this.months = await OIA.api.get("/api/admin/months");
+    // ?month=<id>, else the month that's live, else the newest.
+    const asked = Number(new URLSearchParams(window.location.search).get("month"));
+    const preferred = this.months.find(m => m.id === asked)
+      || this.months.find(m => m.state === "running")
+      || this.months[0];
+    if (preferred) this.monthId = preferred.id;
+    else this.message = "No months yet.";
+  },
+  methods: {
+    // The report is derived, never stored, so it can be pulled up for any
+    // month at any time — it doesn't close the month or change anything.
+    async loadReport() {
+      this.report = null; this.detail = null; this.message = "";
+      if (!this.monthId) return;
+      try {
+        this.report = await OIA.api.get("/api/dashboard/months/" + this.monthId);
+      } catch (e) {
+        this.message = e.message;
+      }
+    },
+    // Fetched on demand, not with the report: a month of day-records is a
+    // lot of rows and only wanted when somebody goes looking.
+    async toggleDetail() {
+      if (this.detail) { this.detail = null; return; }
+      this.busy = true;
+      try {
+        this.detail = await OIA.api.get("/api/dashboard/months/" + this.monthId + "/detail");
+      } catch (e) {
+        this.message = e.message;
+      } finally { this.busy = false; }
+    },
+    // Leave rows carry only the id; the gap table above has the student.
+    studentName(id) {
+      const row = this.report.gap.find(r => r.student_id === id);
+      return row && row.student
+        ? OIA.bilingual(row.student.chinese_name, row.student.english_name) : "#" + id;
+    },
+    printReport() { window.print(); },
+    async postReportToLine() {
+      if (!confirm("Post the " + this.currentMonthYm + " hours summary to the student group?")) return;
+      this.busy = true; this.message = "";
+      try {
+        const res = await OIA.api.post("/api/admin/months/" + this.monthId + "/report/notify", {});
+        this.message = res.sent
+          ? "Posted to the group."
+          : "Already posted for " + this.currentMonthYm + " — not sent again.";
+      } catch (e) {
+        this.message = "Could not post: " + e.message;
+      } finally { this.busy = false; }
+    },
+  },
+});
+OIA.registerGlobals(app);
+app.mount("#report-app");
+</script>
+{% endblock %}
