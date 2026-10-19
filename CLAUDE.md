@@ -129,8 +129,8 @@ style; port this one.
    detection only runs in this state, and leaving it to a manual click meant
    that forgetting it silently disabled the app's core feature.
 7. **Closed** — close-out report (scheduled vs recorded per student, leave summary,
-   task completion, uncovered hours). Setting the state to `closed` is what
-   generates the report, which is shown in place on the admin page.
+   task completion, uncovered hours). The report is derived, never stored, and
+   lives on its own **Report** tab, available for any month at any time.
 
 Open/close dates are **config values**, not hard-coded.
 
@@ -350,8 +350,14 @@ magenta `#C2185B`, brown `#8D6E63`.
   "8:00" to "8", etc.) so the same grid always fits.
 - **Draft review** — same week-by-week grid, pre-commit: each cell is an
   editable dropdown listing only the students available for that hour (§7).
-- **Overseer dashboard** — scheduled-vs-recorded gaps, no-shows, leave patterns
-  (too-often / too-late), uncovered slots, task completion.
+- **Overseer dashboard** — students, plus the month's headline numbers
+  (coverage, uncovered, no-shows, unscheduled sign-ins) linking to the report.
+- **Report** — scheduled-vs-recorded per student, leave patterns (too-often /
+  too-late), day-by-day detail and the exports. *These used to sit on the
+  dashboard as well; once the report had its own tab they were duplicates.*
+- **Tasks** — each regular task shows how often it's been done this month and
+  who did it last. *Task completion moved here from the dashboard: it's asked
+  while looking at the task.*
 
 ---
 

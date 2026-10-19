@@ -64,6 +64,24 @@ def test_old_open_sessions_are_flagged_without_a_reminder(app):
     assert NotificationLog.query.filter_by(type="forgot_sign_out").count() == 0
 
 
+def test_afternoon_session_first_seen_next_morning_still_reminds(app):
+    # Due 18:00, after the business-hours cron's last ping — the next tick is
+    # the following morning, and that one must still send the reminder.
+    from app.notifications.tick import _flag_forgotten_signouts
+    _morning_session()
+    assert _flag_forgotten_signouts(datetime(2026, 10, 8, 7, 0)) == {"forgot_signout_flagged": 1}
+    assert NotificationLog.query.filter_by(type="forgot_sign_out").count() == 1
+
+
+def test_friday_session_first_seen_monday_still_reminds(app):
+    from app.notifications.tick import _flag_forgotten_signouts
+    sess = _morning_session()
+    sess.date = date(2026, 10, 9)  # a Friday
+    db.session.commit()
+    assert _flag_forgotten_signouts(datetime(2026, 10, 12, 7, 0)) == {"forgot_signout_flagged": 1}
+    assert NotificationLog.query.filter_by(type="forgot_sign_out").count() == 1
+
+
 def _quota_spent():
     resp = requests.Response()
     resp.status_code = 429

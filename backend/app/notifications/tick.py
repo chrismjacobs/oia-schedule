@@ -211,6 +211,12 @@ def _flag_forgotten_signouts(now):
     from app.attendance.routes import _run_for_session, _todays_assignments
 
     grace = timedelta(minutes=get_timing("forgot_signout_minutes_after_end"))
+    # An afternoon run ending 17:00 falls due at 18:00, as the business-hours
+    # cron stops, so it's first seen the next working morning. Reminding about
+    # "today's" sessions only meant every afternoon one was flagged silently.
+    remind_from = now.date() - timedelta(days=1)
+    while remind_from.weekday() >= 5:
+        remind_from -= timedelta(days=1)
     open_sessions = AttendanceSession.query.filter(
         AttendanceSession.signed_out_at.is_(None),
         # Nothing can be due before the shortest possible run has ended.
@@ -234,10 +240,10 @@ def _flag_forgotten_signouts(now):
         s.flagged = True
         s.flag_reason = "forgot_sign_out"
         db.session.commit()
-        # Flag any age, but only remind about today's: a session open since
-        # last week (or a backlog on first deploy) is the dashboard's to show,
-        # not a burst of group pushes.
-        if s.date == now.date():
+        # Flag any age, but only remind about today's or the previous working
+        # day's: a session open since last week (or a backlog on first
+        # deploy) is the dashboard's to show, not a burst of pushes.
+        if s.date >= remind_from:
             notify_forgot_sign_out(s, [a.slot for a in run])
         flagged += 1
     return {"forgot_signout_flagged": flagged}
