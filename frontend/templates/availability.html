@@ -4,6 +4,11 @@
 <div id="avail-app" v-cloak>
   <section class="pad" style="margin-top:10px;">
     <h2>Select your available hours <span class="hint">選填可上班時段</span></h2>
+    <!-- Arrived straight from signing in/out (the attendance page redirects
+         here while next month is unanswered) — confirm that went through. -->
+    <div class="panel" v-if="doneMsg" role="status" style="border-left:4px solid var(--ok);">
+      <strong>[[ doneMsg ]]</strong> Now please choose your hours for next month below. 請在下方選填下個月時段。
+    </div>
 
     <p v-if="loading" class="hint">Loading…</p>
     <div class="panel error-text" v-else-if="loadError">[[ loadError ]]</div>
@@ -149,6 +154,11 @@ const app = createApp({
       month: null, dates: [], cells: [], selected: new Set(),
       windowOpen: false, loading: true, saving: false, saveMsg: "", narrow: false, noHours: false, loadError: "",
       loadingLastMonth: false, lastMonthMsg: "", HOURS, KEY,
+      doneMsg: ({
+        "in": "Signed in ✓ 已簽到",
+        "out": "Signed out ✓ 已簽退",
+        "out-photo": "Signed out ✓ — some tasks need a photo to count as done.",
+      })[new URLSearchParams(location.search).get("done")] || "",
     };
   },
   computed: {

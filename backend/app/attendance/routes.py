@@ -216,10 +216,13 @@ def _availability_reminders(student_id):
         if picked:
             continue
         window = SelectionWindow.query.filter_by(month_id=month.id).first()
+        closes_at = window.closes_at if window and window.closes_at else None
         out.append({
             "month_id": month.id,
             "year_month": month.year_month,
-            "closes_at": window.closes_at.isoformat() if window and window.closes_at else None,
+            "closes_at": closes_at.isoformat() if closes_at else None,
+            # Last week before close: the page turns the reminder red.
+            "urgent": bool(closes_at and closes_at - local_now() <= timedelta(days=7)),
         })
     return out
 

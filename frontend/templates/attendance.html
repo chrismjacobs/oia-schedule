@@ -8,13 +8,17 @@
          anything yet — shown on every visit (sign-in and sign-out alike)
          until they do. -->
     <div class="panel" v-for="r in (today ? today.availability_reminders : [])" v-bind:key="'avail-' + r.month_id"
-         role="status" style="border-left:4px solid var(--accent); background:var(--avail-blue-bg);">
-      <h3 style="color:var(--accent);">Pick your hours for [[ r.year_month ]] 請選填 [[ r.year_month ]] 可上班時段</h3>
+         role="status" v-bind:style="r.urgent
+           ? { borderLeft: '4px solid var(--urgent)', background: 'var(--urgent-bg)' }
+           : { borderLeft: '4px solid var(--accent)', background: 'var(--avail-blue-bg)' }">
+      <h3 v-bind:style="{ color: r.urgent ? 'var(--urgent)' : 'var(--accent)' }">
+        <span v-if="r.urgent">Less than a week left — 剩不到一週！ </span>Pick your hours for [[ r.year_month ]] 請選填 [[ r.year_month ]] 可上班時段</h3>
       <p style="margin:4px 0 10px;">Selection is open and you haven't chosen any hours yet.
         <span v-if="r.closes_at">It closes <strong class="mono">[[ formatDateTime(r.closes_at) ]]</strong>.</span>
         <span v-else>It could close at any time.</span>
         Without a selection you won't be scheduled.</p>
-      <a class="btn" href="/availability">Choose my hours 選填時段</a>
+      <a class="btn" href="/availability"
+         v-bind:style="r.urgent ? { background: 'var(--urgent)', borderColor: 'var(--urgent)' } : null">Choose my hours 選填時段</a>
     </div>
 
     <div class="panel" v-if="today && today.due_tasks.length" style="border-left:4px solid var(--warn); background:var(--warn-bg);">
@@ -280,9 +284,21 @@ const app = createApp({
     },
     async signIn() {
       this.busy = true; this.message = "";
-      try { await OIA.api.post("/api/attendance/sign-in"); await this.load(); }
+      try {
+        await OIA.api.post("/api/attendance/sign-in");
+        await this.load();
+        this.toAvailabilityIfUnanswered("in");
+      }
       catch (e) { this.message = e.message; }
       finally { this.busy = false; }
+    },
+    // Straight after signing in or out, a student with an unanswered month
+    // is taken to the availability page rather than left to notice the
+    // reminder panel. The confirmation travels along in the URL.
+    toAvailabilityIfUnanswered(done) {
+      if (this.today && this.today.availability_reminders.length) {
+        window.location.href = "/availability?done=" + done;
+      }
     },
     onProofFile(evt, kind, taskId) {
       const file = evt.target.files[0];
@@ -328,6 +344,7 @@ const app = createApp({
         this.report = { note: "", regular: {}, custom: {} };
         this.proofFiles = {};
         await this.load();
+        this.toAvailabilityIfUnanswered(res.skipped && res.skipped.length ? "out-photo" : "out");
         this.history = await OIA.api.get("/api/attendance/history");
       } catch (e) {
         this.message = e.message;
