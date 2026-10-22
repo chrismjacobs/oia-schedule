@@ -726,12 +726,18 @@ app.component("sync-note", {
   props: { s: { type: Object, required: true } },
   emits: ["dismiss"],
   computed: {
-    needsAction() { return this.s.lost_picks.length > 0 || this.s.kept.length > 0; },
+    released() { return this.s.released || []; },
+    needsAction() { return this.s.lost_picks.length > 0 || this.s.kept.length > 0 || this.released.length > 0; },
     headline() {
       const parts = [];
       if (this.s.created) parts.push("added " + this.s.created + " slot" + (this.s.created === 1 ? "" : "s"));
       if (this.s.removed) parts.push("removed " + this.s.removed + " slot" + (this.s.removed === 1 ? "" : "s"));
       return parts.length ? "Slots updated — " + parts.join(", ") + "." : "No slots changed.";
+    },
+    releasedText() {
+      return "Taken off the committed roster for closed days (no message sent) — let them know: " +
+        this.released.map(r => r.student + " (" + r.hours + "h, " +
+          r.dates.map(d => d.slice(5)).join(", ") + ")").join("; ") + ".";
     },
     lostText() {
       return "Their picks on removed hours were dropped — let them know: " +
@@ -746,6 +752,7 @@ app.component("sync-note", {
   template: `
     <div class="statusline" :class="needsAction ? 'is-shut' : 'is-open'" style="margin-top:10px;">
       <strong v-text="headline"></strong>
+      <span v-if="released.length" v-text="releasedText"></span>
       <span v-if="s.lost_picks.length" v-text="lostText"></span>
       <div v-if="s.kept.length" style="flex-basis:100%;">
         Kept, because they're in use:

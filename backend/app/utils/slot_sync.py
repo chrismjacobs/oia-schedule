@@ -15,7 +15,10 @@ its slot and just the selections on that one hour.
 
 A slot is never removed from under a live roster: anything a committed
 schedule, a leave request, an open-shift offer, or a recorded session hangs
-off it is kept and reported instead, for the overseer to deal with. And a sync
+off it is kept and reported instead, for the overseer to deal with. The one
+exception is a closed date: nobody works a holiday, so a committed student
+with no hours recorded there is taken off (and named, so they can be told)
+rather than routed through leave for a day the office isn't open. And a sync
 that would take selections off more than a handful of students refuses
 outright rather than doing it quietly — see MAX_LOST_DEFAULT.
 """
@@ -28,6 +31,7 @@ from app.models import (
 )
 from app.utils.periods import weekdays_in_month
 from app.utils.tracks import TRACK_DEFAULT_ON
+from app.utils.tz import local_today
 
 # How many students may lose selections in one sync before it refuses.
 #
@@ -52,6 +56,14 @@ class AvailabilityLossRefused(Exception):
         self.slots = slots
 
 
+def closed_dates(month):
+    year, mon = (int(x) for x in month.year_month.split("-"))
+    return {c.date for c in ClosedDate.query.filter(
+        db.extract("year", ClosedDate.date) == year,
+        db.extract("month", ClosedDate.date) == mon,
+    ).all()}
+
+
 def planned_hours(month):
     """The (date, hour, track) triples this month should have a Slot for.
 
@@ -62,11 +74,7 @@ def planned_hours(month):
     "no row means staff it" applied to a second lane would double every hour
     in the month.
     """
-    year, mon = (int(x) for x in month.year_month.split("-"))
-    closed = {c.date for c in ClosedDate.query.filter(
-        db.extract("year", ClosedDate.date) == year,
-        db.extract("month", ClosedDate.date) == mon,
-    ).all()}
+    closed = closed_dates(month)
     regular = {(r.date, r.hour, r.track): r.state
                for r in RegularSlot.query.filter_by(month_id=month.id).all()}
 
@@ -92,7 +100,10 @@ def sync_month_slots(month, max_lost=MAX_LOST_DEFAULT):
       created, removed    — counts
       lost_picks          — [{student, hours}] whose selections were dropped
       kept                — [{date, hour, track, student, reason}] slots left
-                            in place because something live depends on them
+                            in place because something live depends on them,
+                            from today on (past ones are history, not to-dos)
+      released            — [{student, hours, dates}] taken off the committed
+                            roster because their day was closed
 
     Raises AvailabilityLossRefused when the removals would take selections off
     more than `max_lost` students. Pass max_lost=None to go ahead anyway.
@@ -111,6 +122,7 @@ def sync_month_slots(month, max_lost=MAX_LOST_DEFAULT):
     removed = 0
     lost = defaultdict(int)   # student -> hours of selection dropped
     kept = []
+    released = defaultdict(lambda: {"hours": 0, "dates": set()})
     if unplanned:
         ids = [s.id for s in unplanned]
         committed_ids = {s.id for s in Schedule.query.filter_by(
@@ -127,6 +139,21 @@ def sync_month_slots(month, max_lost=MAX_LOST_DEFAULT):
             "offered on Open Shifts": {r.slot_id for r in ReopenedSlot.query.filter(ReopenedSlot.slot_id.in_(ids))},
             "hours already recorded": {r.slot_id for r in SessionHour.query.filter(SessionHour.slot_id.in_(ids))},
         }
+        # A closed date beats a commitment: nobody works it, so the student is
+        # released rather than kept — unless they somehow recorded hours there.
+        closed = closed_dates(month)
+        recorded = busy["hours already recorded"]
+        released_from = {}  # slot id -> student released from it
+        for slot in unplanned:
+            a = committed_assignment.get(slot.id)
+            if a and slot.date in closed and slot.id not in recorded:
+                name = a.student.short_name if a.student else f"#{a.student_id}"
+                released[name]["hours"] += 1
+                released[name]["dates"].add(slot.date.isoformat())
+                released_from[slot.id] = a.student_id
+                db.session.delete(a)
+                del committed_assignment[slot.id]
+        db.session.flush()
 
         # Work out what would go before anything goes, so the refusal below
         # can fire with nothing staged and nothing to unpick.
@@ -145,6 +172,8 @@ def sync_month_slots(month, max_lost=MAX_LOST_DEFAULT):
             removable.append(slot)
             picks_by_slot[slot.id] = Availability.query.filter_by(slot_id=slot.id).all()
             for av in picks_by_slot[slot.id]:
+                if av.student_id == released_from.get(slot.id):
+                    continue  # already named under "released"
                 lost[av.student.short_name if av.student else f"#{av.student_id}"] += 1
 
         lost_picks = [{"student": name, "hours": n} for name, n in sorted(lost.items())]
@@ -167,7 +196,10 @@ def sync_month_slots(month, max_lost=MAX_LOST_DEFAULT):
         "created": created,
         "removed": removed,
         "lost_picks": [{"student": name, "hours": n} for name, n in sorted(lost.items())],
-        "kept": sorted(kept, key=lambda k: (k["date"], k["hour"], k["track"])),
+        "kept": sorted((k for k in kept if k["date"] >= local_today().isoformat()),
+                       key=lambda k: (k["date"], k["hour"], k["track"])),
+        "released": [{"student": name, "hours": r["hours"], "dates": sorted(r["dates"])}
+                     for name, r in sorted(released.items())],
     }
 
 
