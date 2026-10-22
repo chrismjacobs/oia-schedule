@@ -485,6 +485,11 @@ def sign_out():
         current_app.logger.info(
             "late sign-out | student=%s | session #%s (%s) closed at %s",
             current_user.student_id, session.id, session.date, now)
+    elif session.flag_reason == "forgot_sign_out":
+        # Signed out the same day, but only after /tick had already flagged
+        # it. "No sign-out" would now be false; it was still late, though,
+        # so the overseer keeps seeing that.
+        session.flag_reason = "late_sign_out"
     db.session.commit()
     notify_signed_out(session)
     result = session.to_dict()
