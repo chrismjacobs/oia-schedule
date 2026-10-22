@@ -1,117 +1,96 @@
-/* Insurance portal console snippets.
+/* Insurance portal console snippet.
  *
  * The university's insurance portal is a separate system we can't post to, so
  * the overseer applies through its own form. This builds the JavaScript they
  * paste into that page's console to fill it from a student's record, instead
  * of retyping the ID, project and hours by hand for every student.
  *
- * The portal is ASP.NET WebForms and walks through stages, each one a postback
- * that reloads the page — a single pasted script dies at the first one. Hence
- * one snippet per stage, with the student's payload parked in the portal
- * page's own sessionStorage by stage 1 so the later stages still have it after
- * the reloads. Stage 3 keeps a cursor there too, so the same snippet pasted
- * again after each refresh fills the *next* day.
+ * ── Why it's one script and not one per stage ─────────────────────────────────
+ * The portal is ASP.NET WebForms: every step is a postback that reloads the
+ * page, which wipes whatever was pasted into the console. So the snippet
+ * doesn't assume where it is — on each run it looks at what's actually on the
+ * page, works out which stage that is, and fills that stage. Run it, press the
+ * portal's own button, then up-arrow and Enter to run it again. One snippet
+ * per student for the whole application.
+ *
+ * The student's payload is parked in the portal page's own sessionStorage, so
+ * it survives the reloads, and with it a cursor saying which day is next.
  *
  * The portal looks the student up itself: the only identifying thing it's
  * given is the national ID, and it fills the name, student ID, birthday and
  * department back into read-only spans. So there is nothing to type for those
- * — but there is something to check, and stage 2 checks it (see verifyLookup).
+ * — but there is something to check, and stage 2 checks it.
  */
 (function (window) {
   "use strict";
 
   var PORTAL = {
-    // "Unit". Left alone: the portal already preselects it from the admin
+    // "Unit" (#ddlDp) is left alone: the portal preselects it from the admin
     // account that logged in, so there is nothing to set and setting it would
-    // only risk charging the wrong budget. Putting an option value here
-    // ("2Q10" Global Cooperation and Exchange, "2Q20" Overseas Student
-    // Affairs) would override that, should it ever be needed.
-    unit: { sel: "#ddlDp", value: null, label: "Unit" },
+    // only risk charging the wrong budget.
 
     // "Identity" — our students are all MCUT students. Neither radio is
     // checked when the page loads, so this one always has to be set.
-    identity: { mcutStudent: "#rblIdentity_0", label: "Identity" },
+    identity: "#rblIdentity_0",
 
-    // "Insurance Type". Daily (日投保) is the default and the one this flow
-    // wants — it's what makes the per-day hours form appear. Monthly carries
-    // an onclick __doPostBack and would reload the page, so the snippet only
-    // ever touches the daily radio, and only if something has unset it.
-    insuranceType: { daily: "#rblInsurance_1", label: "Insurance type" },
+    // "Insurance Type". Daily (日投保) is the page default and the one this
+    // flow wants — it's what makes the per-day hours form appear. Monthly
+    // carries an onclick __doPostBack and would reload the page, so only the
+    // daily radio is ever touched, and only if something has unset it.
+    daily: "#rblInsurance_1",
 
-    // Stage 1 ends here: the national ID, then Query.
-    query: {
-      nationalId: { sel: "#txtIdno", label: "National ID No." },
-      button:     { sel: "#btnSearch", label: "Query button" },
-      message:    { sel: "#lblHoursMsg", label: "Hours message" },
-    },
+    // Stage 1: the national ID, then Query.
+    nationalId: "#txtIdno",
+    queryButton: "#btnSearch",
+    hoursMessage: "#lblHoursMsg",
 
     // What the Query fills in — read-only spans, checked against our record
     // rather than written to.
-    lookup: {
-      chineseName: "#lblCnm1",
-      studentId:   "#lblStdno",
-      birthday:    "#lblBirthday",
-      department:  "#lblCabr",
-    },
+    foundStudentId: "#lblStdno",
+    foundName: "#lblCnm1",
+    foundDept: "#lblCabr",
 
-    // Stage 2: the job details, then the button through to the hours form.
-    job: {
-      activityName: { sel: "#txtJobName", label: "Activity Name" },
-      funding:      { sel: "#ddlJobCategory", label: "Funding" },
-      addButton:    { sel: "#btnAdd", label: "Add Application Form button" },
-      message:      { sel: "#lblMsg", label: "Message" },
-    },
+    // Stage 2: the job details. #btnAdd relabels itself to "Add Part-time
+    // Work Hours" once a student is loaded; it's the same element either way.
+    jobName: "#txtJobName",
+    funding: "#ddlJobCategory",
+    addButton: "#btnAdd",
 
-    // Stage 3: one day's hours. Note the portal wants yyyy/MM/dd here, not
-    // the ISO dates the API hands out, and start/end are four dropdowns
-    // rather than a time field — the minute lists offer only 00 and 30, which
-    // our on-the-hour slots always satisfy.
-    times: {
-      open:    { sel: "#btnAdd", label: "Add Part-time Work Hours button" },
-      mode:    { sel: "#ddlMode", label: "Date cycle" },
-      count:   { sel: "#txtCount", label: "Times" },
-      date:    { sel: "#txtWorkDate", label: "Work date" },
-      startHH: { sel: "#ddlSHH", label: "Start hour" },
-      startMM: { sel: "#ddlSmm", label: "Start minute" },
-      endHH:   { sel: "#ddlEHH", label: "End hour" },
-      endMM:   { sel: "#ddlEmm", label: "End minute" },
-      hours:   { sel: "#txtHours", label: "Hours" },
-      // The button that actually saves the filled row isn't in the markup
-      // captured so far — it sits below the table. Only the one-click
-      // bookmarklet needs it; the normal flow has the overseer press it, so
-      // this being TODO doesn't hold anything up.
-      submit:  { sel: "#TODO_btnSaveRow", label: "Save row button (one-click variant only)" },
-    },
+    // Stage 3: one day's hours. The portal wants yyyy/MM/dd here, not the ISO
+    // dates the API hands out, and start/end are four dropdowns rather than a
+    // time field — the minute lists offer only 00 and 30, which our
+    // on-the-hour slots always satisfy.
+    mode: "#ddlMode",          // 0 = Single Day, 1 = Multiple Days, 2 = Period
+    count: "#txtCount",
+    workDate: "#txtWorkDate",
+    startHH: "#ddlSHH",
+    startMM: "#ddlSmm",
+    endHH: "#ddlEHH",
+    endMM: "#ddlEmm",
+    hours: "#txtHours",
   };
 
   var STORE_KEY = "oia.insurance";
 
-  // Every selector still carrying a TODO — surfaced in the UI so a snippet is
-  // never copied in the belief that it is complete when it isn't.
-  function pendingSelectors() {
-    var out = [];
-    Object.keys(PORTAL).forEach(function (stage) {
-      var group = PORTAL[stage];
-      Object.keys(group).forEach(function (field) {
-        var f = group[field];
-        if (f && f.sel && f.sel.indexOf("TODO") !== -1) out.push(f.label);
-      });
-    });
-    return out;
+  function q(value) {
+    return JSON.stringify(value == null ? "" : String(value));
   }
 
-  // ---------------- snippet building ----------------
-
-  // Pasted scripts run on a page that is not ours, so they can share nothing
-  // with it: each snippet carries its own copy of these helpers. `set` fires
-  // input and change the way a real keystroke would, because WebForms hangs
-  // validation off those events. `setSelect` refuses a value that isn't one of
-  // the options — assigning an unknown value to a <select> silently blanks it,
-  // which would submit the wrong funding source without a word.
-  var PRELUDE = [
+  // Pasted code runs on a page that is not ours, so it can share nothing with
+  // it and carries its own helpers.
+  //
+  //  - `set` fires input and change the way a real keystroke would, because
+  //    WebForms hangs validation off those events.
+  //  - `setSelect` refuses a value that isn't one of the options: assigning an
+  //    unknown value to a <select> silently blanks it, which would submit the
+  //    wrong funding source without a word.
+  //  - `check` clicks a radio only when it isn't already set, so the daily
+  //    insurance radio is never clicked needlessly.
+  var HELPERS = [
     "  var K = " + JSON.stringify(STORE_KEY) + ";",
+    "  function opt(sel) { return document.querySelector(sel); }",
     "  function pick(sel) {",
-    "    var el = document.querySelector(sel);",
+    "    var el = opt(sel);",
     "    if (!el) throw new Error('Field not found on this page: ' + sel);",
     "    return el;",
     "  }",
@@ -127,194 +106,207 @@
     "    el.value = value; fire(el); return el;",
     "  }",
     "  function check(sel) { var el = pick(sel); if (!el.checked) el.click(); return el; }",
-    "  function text(sel) { var el = document.querySelector(sel); return el ? el.textContent.trim() : ''; }",
+    "  function text(sel) { var el = opt(sel); return el ? el.textContent.trim() : ''; }",
   ].join("\n");
 
-  function q(value) {
-    return JSON.stringify(value == null ? "" : String(value));
-  }
-
-  function wrap(title, body) {
-    return ["/* " + title + " */", "(function () {", PRELUDE, body, "})();"].join("\n");
-  }
-
-  /** Stage 1: identify the student and press Query.
-   *
-   *  Everything the portal needs before the lookup, and nothing after it —
-   *  Query is a postback, so anything typed past this point would be filled
-   *  in, reloaded away, and have to be done again. */
-  function buildLookup(payload) {
+  /** The whole application for one student, as one re-runnable script. */
+  function buildScript(payload) {
     var s = payload.student;
-    var lines = [
-      // Parked before the click, because the click navigates.
-      "  sessionStorage.setItem(K, " + q(JSON.stringify({
-        student: s, month: payload.month, days: payload.days, cursor: 0,
-      })) + ");",
-    ];
+    var P = PORTAL;
+    var who = s.english_name || s.chinese_name;
 
-    if (PORTAL.unit.value) {
-      lines.push("  setSelect(" + q(PORTAL.unit.sel) + ", " + q(PORTAL.unit.value) + ");");
-    }  // else: the portal sets Unit from the logged-in admin — untouched.
+    var lines = [];
 
-    lines.push("  check(" + q(PORTAL.identity.mcutStudent) + ");");
-    // Daily is the page default; this only clicks if something unset it, and
-    // never touches the monthly radio, which would postback.
-    lines.push("  check(" + q(PORTAL.insuranceType.daily) + ");");
+    lines.push("  var PAYLOAD = " + JSON.stringify({
+      student: s, month: payload.month, days: payload.days,
+    }) + ";");
 
+    // ---- park or resume ----
+    // Progress is kept per student *and* month, not in one slot. A single slot
+    // meant that doing Genie, switching to Caramel, then coming back to Genie
+    // restarted her at day 1 — re-adding a day already saved, as a duplicate
+    // row in a live insurance system. Keyed this way, each application keeps
+    // its own cursor and they can be interleaved freely.
+    //
+    // The cursor is only trusted while the day list is unchanged: if the
+    // schedule was edited since, "day 3" no longer means the same thing, so it
+    // starts over and says so.
+    lines.push(
+      "  var key = PAYLOAD.student.id + ':' + PAYLOAD.month.id;",
+      "  var all = JSON.parse(sessionStorage.getItem(K) || '{}');",
+      "  var state = all[key];",
+      "  if (state && JSON.stringify(state.days) !== JSON.stringify(PAYLOAD.days)) {",
+      "    console.warn('The schedule changed since this application was started — restarting the day list.');",
+      "    state = null;",
+      "  }",
+      "  if (!state) state = { student: PAYLOAD.student, month: PAYLOAD.month, days: PAYLOAD.days, cursor: 0 };",
+      "  else state.student = PAYLOAD.student;",   // pick up name/ID/project corrections
+      "  function save() { all[key] = state; sessionStorage.setItem(K, JSON.stringify(all)); }",
+      "  save();",
+      "  if (state.cursor > 0 && state.cursor < state.days.length) {",
+      "    console.log('Resuming ' + PAYLOAD.student.english_name + ' ' + PAYLOAD.month.year_month +",
+      "                ' at day ' + (state.cursor + 1) + ' of ' + state.days.length + '.');",
+      "  }"
+    );
+
+    // ---- stage 1: identify the student, then Query ----
+    lines.push(
+      "  function stage1() {",
+      "    check(" + q(P.identity) + ");",
+      "    check(" + q(P.daily) + ");"
+    );
     if (!s.insurance_number) {
       // Nothing to look the student up by, so don't press Query on an empty
       // box — that just returns an error and loses the rest of the fill.
-      lines.push("  console.warn(" + q("No national ID on record for " +
-        (s.english_name || s.chinese_name) + " — type it into " +
-        PORTAL.query.nationalId.label + " and press Query by hand, then run stage 2.") + ");");
+      lines.push(
+        "    console.warn(" + q("No national ID on record for " + who +
+          " — type it into the National ID box and press Query by hand, then run this again.") + ");"
+      );
     } else {
-      lines.push("  set(" + q(PORTAL.query.nationalId.sel) + ", " + q(s.insurance_number) + ");");
-      lines.push("  console.log(" + q("Looking up " + s.insurance_number + " — the page will reload. " +
-        "Then paste stage 2.") + ");");
-      lines.push("  pick(" + q(PORTAL.query.button.sel) + ").click();");
+      lines.push(
+        "    set(" + q(P.nationalId) + ", " + q(s.insurance_number) + ");",
+        "    console.log(" + q("Stage 1 — looking up " + s.insurance_number +
+          ". The page will reload; then run this again (up-arrow, Enter).") + ");",
+        "    pick(" + q(P.queryButton) + ").click();"
+      );
     }
+    lines.push("  }");
 
-    return wrap("OIA insurance · stage 1 · identify and Query", lines.join("\n"));
-  }
-
-  /** Stage 2: check who the portal found, then fill the job details.
-   *
-   *  The check is the point of this stage as much as the filling. The portal
-   *  is keyed on the national ID alone, so a wrong or stale number on our
-   *  record insures somebody else entirely — and every screen after this one
-   *  looks perfectly normal. Comparing the student ID it returns against the
-   *  one we hold catches that while it's still free to fix. */
-  function buildJob(payload) {
-    var s = payload.student;
-    var job = PORTAL.job;
-    var lines = [
-      "  var state = JSON.parse(sessionStorage.getItem(K) || 'null');",
-      "  if (!state) throw new Error('Run the stage 1 snippet first — nothing is parked for this student.');",
-      "  var found = text(" + q(PORTAL.lookup.studentId) + ");",
-      "  if (!found) throw new Error('The portal has not looked anyone up yet — press Query first.');",
-      "  if (found.toUpperCase() !== String(state.student.student_id).toUpperCase()) {",
-      "    throw new Error('WRONG STUDENT: the portal found ' + found + ' (' + text(" +
-        q(PORTAL.lookup.chineseName) + ") + '), but this application is for ' +",
-      "                    state.student.student_id + ' (' + state.student.chinese_name + '). " +
-        "Check the national ID on their record before going on.');",
+    // ---- stage 2: confirm who was found, then fill the job details ----
+    // The check is as much the point of this stage as the filling. The portal
+    // is keyed on the national ID alone, so a wrong or stale number on our
+    // record insures somebody else entirely — and every screen after this one
+    // looks perfectly normal. Comparing the student ID it returns against the
+    // one we hold catches that while it is still free to fix.
+    lines.push(
+      "  function confirmStudent() {",
+      "    var found = text(" + q(P.foundStudentId) + ");",
+      "    if (found && found.toUpperCase() !== String(state.student.student_id).toUpperCase()) {",
+      "      throw new Error('WRONG STUDENT: the portal has ' + found + ' (' + text(" + q(P.foundName) + ") +",
+      "        '), but this application is for ' + state.student.student_id + ' (' + state.student.chinese_name +",
+      "        '). Check the national ID on their record before going on.');",
+      "    }",
+      "    return found;",
       "  }",
-      "  console.log('Confirmed ' + found + ' · ' + text(" + q(PORTAL.lookup.chineseName) + ") +",
-      "              ' · ' + text(" + q(PORTAL.lookup.department) + "));",
-      "  var hoursMsg = text(" + q(PORTAL.query.message.sel) + ");",
-      "  if (hoursMsg) console.warn('Portal says: ' + hoursMsg);",
-    ];
-
+      "  function fillJob() {"
+    );
     if (s.project_name) {
-      lines.push("  set(" + q(job.activityName.sel) + ", " + q(s.project_name) + ");");
+      lines.push("    set(" + q(P.jobName) + ", " + q(s.project_name) + ");");
     } else {
-      lines.push("  console.warn(" + q("No project name on record — " + job.activityName.label +
-        " left blank.") + ");");
+      lines.push("    console.warn(" + q("No project name on record — Activity Name left blank.") + ");");
     }
-
     // funding_category is null when the overseer hasn't set one. "0" is
     // College — a real choice — so only null skips the field.
     if (s.funding_category == null) {
-      lines.push("  console.warn(" + q("No funding source on record — " + job.funding.label +
-        " left as the page had it.") + ");");
+      lines.push("    console.warn(" + q("No funding source on record — Funding left as the page had it.") + ");");
     } else {
-      lines.push("  setSelect(" + q(job.funding.sel) + ", " + q(s.funding_category) + ");");
+      lines.push("    setSelect(" + q(P.funding) + ", " + q(s.funding_category) + ");");
     }
-
-    // Once the student is loaded, #btnAdd relabels itself to "Add Part-time
-    // Work Hours" — same element, so the message names it by its current text
-    // rather than a guess.
-    lines.push("  console.log('Filled. Check it, then press \\u201c' + " +
-      "(pick(" + q(job.addButton.sel) + ").value || 'Add') + '\\u201d — " +
-      payload.days.length + " day(s), " + payload.total_hours + "h to add.');");
-    return wrap("OIA insurance · stage 2 · confirm the student and fill the job details",
-                lines.join("\n"));
-  }
-
-  /** Stage 3: fill the next unadded day.
-   *
-   *  Run once per day. The cursor lives in the portal page's sessionStorage,
-   *  so it survives the reload that saving a row causes and the same code
-   *  moves on by itself. Running it again after the last day is a no-op
-   *  rather than an error.
-   *
-   *  `autoSubmit` saves the row too, for the one-click bookmarklet. It needs
-   *  PORTAL.times.submit filled in first.
-   *
-   *  The double-run guard is the fiddly part. Advancing the cursor on every
-   *  run would mean two clicks before saving silently skips a day — and a
-   *  missing day in an insurance application is exactly the kind of thing
-   *  nobody notices until it matters. So the index of the day filled during
-   *  this page load is kept on `window`, which the reload wipes: run it twice
-   *  without saving and it re-fills the same day, run it after a save and it
-   *  moves on. */
-  function buildDay(autoSubmit) {
-    var t = PORTAL.times;
-    var lines = [
-      "  var state = JSON.parse(sessionStorage.getItem(K) || 'null');",
-      "  if (!state) throw new Error('Run the stage 1 snippet first — nothing is parked for this student.');",
-      // A clear instruction beats a confusing "field not found" from pick().
-      "  if (!document.querySelector(" + q(t.date.sel) + ")) {",
-      "    throw new Error('The hours row is not open — press " + t.open.label.replace(" button", "") + " first.');",
+    lines.push(
       "  }",
-      "  var i = window.__oiaDayIndex;",
-      "  if (i == null) {",
-      "    i = state.cursor;",
-      "    if (state.days[i]) { state.cursor = i + 1; sessionStorage.setItem(K, JSON.stringify(state)); }",
-      "    window.__oiaDayIndex = i;",
-      "  }",
-      "  var day = state.days[i];",
-      "  if (!day) { console.log('All ' + state.days.length + ' day(s) done. Nothing left.'); return; }",
-      // The portal wants yyyy/MM/dd; the API speaks ISO.
-      "  set(" + q(t.date.sel) + ", day.date.replace(/-/g, '/'));",
-      "  setSelect(" + q(t.mode.sel) + ", '0');",   // Single Day
-      "  var cnt = document.querySelector(" + q(t.count.sel) + ");",
-      "  if (cnt && !cnt.disabled) { cnt.value = '1'; fire(cnt); }",
-      "  setSelect(" + q(t.startHH.sel) + ", day.start.slice(0, 2));",
-      "  setSelect(" + q(t.startMM.sel) + ", day.start.slice(3, 5));",
-      "  setSelect(" + q(t.endHH.sel) + ", day.end.slice(0, 2));",
-      "  setSelect(" + q(t.endMM.sel) + ", day.end.slice(3, 5));",
-      "  set(" + q(t.hours.sel) + ", String(day.hours));",
-      "  console.log('Day ' + (i + 1) + ' of ' + state.days.length + ': ' +",
-      "              day.date + ' ' + day.start + '-' + day.end + ' (' + day.hours + 'h).');",
-    ];
+      "  function stage2() {",
+      "    var found = confirmStudent();",
+      "    var msg = text(" + q(P.hoursMessage) + ");",
+      "    if (msg) console.warn('Portal says: ' + msg);",
+      "    fillJob();",
+      "    console.log('Stage 2 — confirmed ' + found + ' · ' + text(" + q(P.foundName) + ") + ' · ' +",
+      "                text(" + q(P.foundDept) + ") + '. " + payload.days.length + " day(s), " +
+                    payload.total_hours + "h to add.');",
+      "    console.log('Check it, then press \\u201c' + (opt(" + q(P.addButton) + ") || {}).value +",
+      "                '\\u201d and run this again.');",
+      "  }"
+    );
 
-    if (autoSubmit) {
-      lines.push("  pick(" + q(t.submit.sel) + ").click();");
-    } else {
+    // ---- stage 3: fill the next unadded day ----
+    // The double-run guard is the fiddly part. Advancing the cursor on every
+    // run would mean running it twice before saving silently skips a day — and
+    // a missing day in an insurance application is exactly the kind of thing
+    // nobody notices until it matters. So the index filled during this page
+    // load is kept on `window`, which the reload wipes: run it twice without
+    // saving and it re-fills the same day, run it after a save and it moves on.
+    lines.push(
+      "  function stage3() {",
+      "    confirmStudent();",
+      // The job fields sit on the same form; if a postback cleared them, put
+      // them back rather than submitting a row against a blank activity name.
+      "    var jn = opt(" + q(P.jobName) + ");",
+      "    if (jn && !jn.value) { fillJob(); console.log('(re-filled the job details)'); }",
+      // Keyed like the parked state, so switching application part-way
+      // through a page load doesn't reuse the other one's index.
+      "    var mark = window.__oiaFill;",
+      "    var i = (mark && mark.key === key) ? mark.i : null;",
+      "    if (i == null) {",
+      "      i = state.cursor;",
+      "      if (state.days[i]) { state.cursor = i + 1; save(); }",
+      "      window.__oiaFill = { key: key, i: i };",
+      "    }",
+      "    var day = state.days[i];",
+      "    if (!day) {",
+      "      console.log('All ' + state.days.length + ' day(s) done for ' + state.month.year_month + '. Nothing left.');",
+      "      return;",
+      "    }",
+      "    set(" + q(P.workDate) + ", day.date.replace(/-/g, '/'));",
+      "    setSelect(" + q(P.mode) + ", '0');",
+      "    var cnt = opt(" + q(P.count) + ");",
+      "    if (cnt && !cnt.disabled) { cnt.value = '1'; fire(cnt); }",
+      "    setSelect(" + q(P.startHH) + ", day.start.slice(0, 2));",
+      "    setSelect(" + q(P.startMM) + ", day.start.slice(3, 5));",
+      "    setSelect(" + q(P.endHH) + ", day.end.slice(0, 2));",
+      "    setSelect(" + q(P.endMM) + ", day.end.slice(3, 5));",
+      "    set(" + q(P.hours) + ", String(day.hours));",
+      "    console.log('Stage 3 — day ' + (i + 1) + ' of ' + state.days.length + ': ' + day.date + ' ' +",
+      "                day.start + '-' + day.end + ' (' + day.hours + 'h).');",
       // Saving here would reload before the overseer could look at the row,
       // and a wrong day submitted to a live insurance system is far more work
-      // to undo than one extra click. So it stops at "filled".
-      lines.push("  console.log('Check it, then save the row. After the reload, run this again for the next day.');");
-    }
-    return wrap("OIA insurance · stage 3 · " + (autoSubmit ? "fill and save the next day" : "fill the next day"),
-                lines.join("\n"));
+      // to undo than one extra keystroke. So it stops at "filled".
+      "    console.log('Check it, save the row, then run this again for the next day.');",
+      "  }"
+    );
+
+    // ---- which stage are we on? ----
+    // Decided from what the page actually has, so the same script works
+    // wherever it lands. The hours row is checked first because it opens
+    // *below* the job fields — both are present at that point, and the hours
+    // row is the more specific signal.
+    lines.push(
+      "  if (opt(" + q(P.workDate) + ")) stage3();",
+      "  else if (text(" + q(P.foundStudentId) + ")) stage2();",
+      "  else if (opt(" + q(P.nationalId) + ")) stage1();",
+      "  else throw new Error('This does not look like the insurance application page — " +
+        "no National ID box, no loaded student, no hours row.');"
+    );
+
+    return [
+      "/* OIA insurance · " + who + " · " + payload.month.year_month,
+      "   Run this, press the portal's button, then up-arrow + Enter to run it again.",
+      "   It works out which stage the page is on each time. */",
+      "(function () {",
+      HELPERS,
+      lines.join("\n"),
+      "})();",
+    ].join("\n");
   }
 
-  /** The stage 3 code as a `javascript:` URL, to keep as a bookmark.
-   *
-   *  This is the answer to the console being wiped by every postback: a
-   *  bookmarklet is re-injected by the browser on each click, so it doesn't
-   *  care that the page reloaded. One click per day instead of finding the
-   *  console and pasting into it. The code is student-agnostic — it reads
-   *  whoever stage 1 parked — so the bookmark is made once and kept. */
-  function buildBookmarklet(autoSubmit) {
-    return "javascript:" + encodeURIComponent(buildDay(autoSubmit) + ";void 0;");
-  }
-
-  /** Clears the parked payload — for starting a different student, or
-   *  restarting one whose cursor ran ahead of what actually got added. */
+  /** Clears all parked progress — for restarting a day list that ran ahead of
+   *  what actually got saved. Switching students doesn't need it: each
+   *  application keeps its own cursor. */
   function buildReset() {
-    return wrap("OIA insurance · reset", [
-      "  sessionStorage.removeItem(K);",
-      "  console.log('Cleared. Start again from stage 1.');",
-    ].join("\n"));
+    return [
+      "/* OIA insurance · reset — forgets how far every application has got */",
+      "(function () {",
+      "  sessionStorage.removeItem(" + JSON.stringify(STORE_KEY) + ");",
+      "  delete window.__oiaFill;",
+      "  console.log('Cleared. Every application starts from day 1 again.');",
+      "})();",
+    ].join("\n");
   }
 
-  /** Lists every field on the portal page with its id, name and nearest
-   *  label — what stage 3's TODO selectors need to be filled in from. */
+  /** Lists every field on whatever portal page is open, with its id, name and
+   *  nearest label — for when the portal's markup changes and PORTAL above
+   *  needs updating. */
   function buildInspector() {
     return [
-      "/* OIA insurance · field inspector — run on the hours form, copy the table */",
+      "/* OIA insurance · field inspector */",
       "(function () {",
       "  function labelFor(el) {",
       "    if (el.id) {",
@@ -341,11 +333,7 @@
 
   window.OIAInsurance = {
     PORTAL: PORTAL,
-    pendingSelectors: pendingSelectors,
-    buildLookup: buildLookup,
-    buildJob: buildJob,
-    buildDay: buildDay,
-    buildBookmarklet: buildBookmarklet,
+    buildScript: buildScript,
     buildReset: buildReset,
     buildInspector: buildInspector,
   };
