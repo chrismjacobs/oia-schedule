@@ -488,6 +488,17 @@ table.data td.desc-cell {
 }
 table.data td.row-actions { white-space: nowrap; }
 
+/* The student's name is the way into their row — it's the biggest target in
+   the row and the thing the overseer is already looking for, so it opens the
+   details rather than a separate edit icon. Styled as text, not a button, but
+   it is one: it keeps a real focus ring and announces its expanded state. */
+.name-btn {
+  background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit;
+  text-align: left; cursor: pointer; border-radius: 4px;
+}
+.name-btn:hover { color: var(--accent); text-decoration: underline; }
+.name-btn[aria-expanded="true"] { color: var(--accent); font-weight: 700; }
+
 /* Plain-language answer to "can students act right now?", above the controls
    that decide it. Status colours only — never the student palette. */
 .statusline {
