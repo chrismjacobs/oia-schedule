@@ -199,9 +199,28 @@
     <button v-bind:disabled="busy" v-on:click="runTick">Run tick now</button>
     <pre class="hint" style="white-space:pre-wrap; margin-top:8px;">[[ tickResult ]]</pre>
   </div>
+
+  <!-- The per-student script lives on the dashboard, next to the student it
+       belongs to. These two are for when something has gone wrong with it,
+       which is why they're here and not in the way. -->
+  <div class="panel">
+    <h2>Insurance portal tools 勞保工具</h2>
+    <p class="hint">For the console script on a student's dashboard row. Neither of these is needed
+      for a normal application.</p>
+    <div v-for="tool in insuranceTools" v-bind:key="tool.title" style="margin-top:12px;">
+      <label style="display:block; color:var(--ink-2); font-size:12px;">[[ tool.title ]]</label>
+      <p class="hint" style="margin:2px 0;">[[ tool.hint ]]</p>
+      <textarea class="mono" rows="3" readonly v-bind:value="tool.code"
+                style="width:100%; font-size:11px;" v-on:focus="$event.target.select()"></textarea>
+      <button type="button" class="secondary" v-on:click="copyTool(tool)">
+        [[ copiedTool === tool.title ? 'Copied' : 'Copy' ]]</button>
+    </div>
+    <p class="error-text" v-if="toolError">[[ toolError ]]</p>
+  </div>
 </div>
 {% endblock %}
 {% block page_script %}
+<script src="{{ url_for('static', filename='js/insurance-portal.js') }}"></script>
 <script>
 const { createApp } = Vue;
 // Plain-language name and what each unit of the weight means.
@@ -235,9 +254,24 @@ const app = createApp({
       tickResult: "",
       diag: null, diagError: "",
       quota: null, QUOTA_ACCOUNTS, ATTENDANCE_MESSAGES,
+      copiedTool: "", toolError: "",
     };
   },
   computed: {
+    // Student-independent, so they're built once rather than per student.
+    insuranceTools() {
+      return [
+        { title: "Reset progress",
+          hint: "Forgets how far every application has got. Only needed if the day cursor ran ahead"
+            + " of what the portal actually accepted — then start that student again from the top.",
+          code: OIAInsurance.buildReset() },
+        { title: "Field inspector",
+          hint: "If the portal changes and the script says a field wasn't found: run this on the page"
+            + " in question to list every field's id and label, then update PORTAL in"
+            + " static/js/insurance-portal.js.",
+          code: OIAInsurance.buildInspector() },
+      ];
+    },
     // Priority order (the JSON arrives alphabetised), then anything unknown.
     weightKeys() {
       const have = Object.keys(this.settings.solver_weights);
@@ -249,6 +283,18 @@ const app = createApp({
     await Promise.all([this.loadSemesters(), this.loadSettings(), this.loadQuota()]);
   },
   methods: {
+    async copyTool(tool) {
+      this.toolError = "";
+      try {
+        await navigator.clipboard.writeText(tool.code);
+        this.copiedTool = tool.title;
+      } catch (e) {
+        // Clipboard access can be refused (insecure origin, permissions) —
+        // the snippet is in a textarea either way, so say so rather than fail
+        // silently.
+        this.toolError = "Couldn't copy automatically — select the box and copy by hand.";
+      }
+    },
     async loadQuota() {
       try {
         this.quota = await OIA.api.get("/api/line-quota");
