@@ -50,11 +50,22 @@
     foundName: "#lblCnm1",
     foundDept: "#lblCabr",
 
-    // Stage 2: the job details. #btnAdd relabels itself to "Add Part-time
-    // Work Hours" once a student is loaded; it's the same element either way.
+    // Stage 2: the job details.
     jobName: "#txtJobName",
     funding: "#ddlJobCategory",
+    jobMessage: "#lblMsg",
+
+    // One id, two jobs. #btnAdd carries the application forward at both
+    // steps, relabelling itself as it goes: "Add Application Form and Fill in
+    // Hours" once the student's details are in, then "Add Part-time Work
+    // Hours" on the hours row. Which one it currently is can only be read off
+    // its value, so that's logged rather than relied on — the page structure
+    // (whether the hours row exists) is what decides the stage.
     addButton: "#btnAdd",
+    addButtonLabels: {
+      job: "Application Form",        // expected at stage 2
+      hours: "Part-time Work Hours",  // expected at stage 3
+    },
 
     // Stage 3: one day's hours. The portal wants yyyy/MM/dd here, not the ISO
     // dates the API hands out, and start/end are four dropdowns rather than a
@@ -69,6 +80,17 @@
     endMM: "#ddlEmm",
     hours: "#txtHours",
   };
+
+  // Whether the script presses the portal's own buttons — Query, then #btnAdd
+  // at both of its steps — or fills and stops for the overseer to press them.
+  //
+  // On: one keystroke per step, which is the point of the thing. The cost is
+  // that a row is submitted before anyone looks at it; the overseer's answer
+  // to that is to delete a wrong row in the portal, which they can do. Worth
+  // knowing: the cursor advances when a row is filled, so if the portal
+  // *rejects* a save the day is passed over silently — hence the message
+  // check at the top of stage 3 and the checklist printed at the end.
+  var AUTO_SUBMIT = true;
 
   var STORE_KEY = "oia.insurance";
 
@@ -107,6 +129,21 @@
     "  }",
     "  function check(sel) { var el = pick(sel); if (!el.checked) el.click(); return el; }",
     "  function text(sel) { var el = opt(sel); return el ? el.textContent.trim() : ''; }",
+    // #btnAdd does both the "fill in hours" step and the "add these hours"
+    // step, so this presses it and says which label it was wearing. A label
+    // that doesn't read as expected is worth seeing — the stage was decided
+    // from the page's structure, not from this — but it isn't worth refusing
+    // to click over: the portal in Chinese would word it differently.
+    "  function press(expected) {",
+    "    var b = pick(" + JSON.stringify(PORTAL.addButton) + ");",
+    "    var label = (b.value || b.textContent || '').trim();",
+    "    if (expected && label.indexOf(expected) === -1) {",
+    "      console.warn('Expected the button to say \\u201c' + expected + '\\u201d but it says \\u201c' +",
+    "                   label + '\\u201d — pressing it anyway.');",
+    "    }",
+    "    console.log('Pressing \\u201c' + label + '\\u201d. Run again (up-arrow, Enter) for the next step.');",
+    "    b.click();",
+    "  }",
   ].join("\n");
 
   /** The whole application for one student, as one re-runnable script. */
@@ -212,8 +249,10 @@
       "    console.log('Stage 2 — confirmed ' + found + ' · ' + text(" + q(P.foundName) + ") + ' · ' +",
       "                text(" + q(P.foundDept) + ") + '. " + payload.days.length + " day(s), " +
                     payload.total_hours + "h to add.');",
-      "    console.log('Check it, then press \\u201c' + (opt(" + q(P.addButton) + ") || {}).value +",
-      "                '\\u201d and run this again.');",
+      AUTO_SUBMIT
+        ? "    press(" + q(P.addButtonLabels.job) + ");"
+        : "    console.log('Check it, then press \\u201c' + (opt(" + q(P.addButton) + ") || {}).value +\n" +
+          "                '\\u201d and run this again.');",
       "  }"
     );
 
@@ -227,10 +266,12 @@
     lines.push(
       "  function stage3() {",
       "    confirmStudent();",
-      // The job fields sit on the same form; if a postback cleared them, put
-      // them back rather than submitting a row against a blank activity name.
-      "    var jn = opt(" + q(P.jobName) + ");",
-      "    if (jn && !jn.value) { fillJob(); console.log('(re-filled the job details)'); }",
+      // Auto-submit means the cursor has already moved past the day that was
+      // just sent, so a rejected save would be skipped in silence. Whatever
+      // the portal has to say gets surfaced before anything else happens.
+      "    var pmsg = text(" + q(P.jobMessage) + ") || text(" + q(P.hoursMessage) + ");",
+      "    if (pmsg) console.warn('Portal says: ' + pmsg + '  — if that is an error, the day just sent " +
+        "did not go in. Re-run the Reset snippet and start this student again.');",
       // Keyed like the parked state, so switching application part-way
       // through a page load doesn't reuse the other one's index.
       "    var mark = window.__oiaFill;",
@@ -242,9 +283,21 @@
       "    }",
       "    var day = state.days[i];",
       "    if (!day) {",
-      "      console.log('All ' + state.days.length + ' day(s) done for ' + state.month.year_month + '. Nothing left.');",
+      "      console.log('All ' + state.days.length + ' day(s) sent for ' + state.month.year_month +",
+      "                  '. Compare the list in the portal against this:');",
+      // Printed because the rows went in without anyone reading them: this is
+      // what the portal's table should now hold, line for line.
+      "      console.table(state.days.map(function (d) {",
+      "        return { date: d.date.replace(/-/g, '/'), start: d.start, end: d.end, hours: d.hours };",
+      "      }));",
       "      return;",
       "    }",
+      // The job fields sit on the same form; if a postback cleared them, put
+      // them back rather than sending a row against a blank activity name.
+      // Checked only once there's a day to send, so finishing a student
+      // doesn't end on a stray "re-filled" line.
+      "    var jn = opt(" + q(P.jobName) + ");",
+      "    if (jn && !jn.value) { fillJob(); console.log('(re-filled the job details)'); }",
       "    set(" + q(P.workDate) + ", day.date.replace(/-/g, '/'));",
       "    setSelect(" + q(P.mode) + ", '0');",
       "    var cnt = opt(" + q(P.count) + ");",
@@ -256,10 +309,9 @@
       "    set(" + q(P.hours) + ", String(day.hours));",
       "    console.log('Stage 3 — day ' + (i + 1) + ' of ' + state.days.length + ': ' + day.date + ' ' +",
       "                day.start + '-' + day.end + ' (' + day.hours + 'h).');",
-      // Saving here would reload before the overseer could look at the row,
-      // and a wrong day submitted to a live insurance system is far more work
-      // to undo than one extra keystroke. So it stops at "filled".
-      "    console.log('Check it, save the row, then run this again for the next day.');",
+      AUTO_SUBMIT
+        ? "    press(" + q(P.addButtonLabels.hours) + ");"
+        : "    console.log('Check it, add the hours, then run this again for the next day.');",
       "  }"
     );
 

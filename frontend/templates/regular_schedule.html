@@ -65,6 +65,30 @@
     <p class="hint" v-if="timesMessage">[[ timesMessage ]]</p>
   </details>
 
+  <!-- ============ Manual overrides ============ -->
+  <!-- The cycle runs itself (times open and close selection, /tick starts the
+       month). This is the way out when it needs correcting by hand — next to
+       the times it overrides, but folded shut, because it is not part of a
+       normal month. -->
+  <details class="panel" v-if="monthId">
+    <summary>Manual overrides 手動調整</summary>
+    <div class="field-row" style="margin-top:4px;">
+      <div class="field" style="max-width:260px;"><label>Month state 狀態</label>
+        <select v-bind:value="currentMonthState" v-bind:disabled="busy"
+                v-on:change="setMonthState($event.target.value)">
+          <option v-for="s in MONTH_STATES" v-bind:key="s" v-bind:value="s">[[ s ]][[ s === forwardStep ? '  (usual next step)' : '' ]]</option>
+        </select>
+      </div>
+      <div class="field" style="align-self:end; flex:0 0 auto; min-width:0;" v-if="regularSlots.length && beforeCommit">
+        <button class="secondary" v-bind:disabled="busy || !staleCount" v-on:click="resyncMonth">
+          Re-apply template to [[ currentMonthYm ]][[ staleCount ? ' (' + staleCount + ' differ)' : '' ]]</button>
+      </div>
+    </div>
+    <p class="hint" v-if="guide">[[ STATE_HELP[currentMonthState] ]]</p>
+    <p class="hint" v-if="overrideMessage">[[ overrideMessage ]]
+      <a v-if="currentMonthState === 'closed'" v-bind:href="'/report?month=' + monthId">Month report</a></p>
+  </details>
+
   <!-- ============ The one action this month needs next ============ -->
   <!-- At most one button, and which one follows from where the month is:
        populate first, recommit once the roster is committed. In between
@@ -208,28 +232,6 @@
     </template>
   </div>
 
-  <!-- ============ Manual overrides ============ -->
-  <!-- The cycle runs itself (times open and close selection, /tick starts the
-       month). This is the way out when it needs correcting by hand — kept, but
-       out of the way, because it is not part of a normal month. -->
-  <details class="panel" v-if="monthId">
-    <summary>Manual overrides 手動調整</summary>
-    <div class="field-row" style="margin-top:4px;">
-      <div class="field" style="max-width:260px;"><label>Month state 狀態</label>
-        <select v-bind:value="currentMonthState" v-bind:disabled="busy"
-                v-on:change="setMonthState($event.target.value)">
-          <option v-for="s in MONTH_STATES" v-bind:key="s" v-bind:value="s">[[ s ]][[ s === forwardStep ? '  (usual next step)' : '' ]]</option>
-        </select>
-      </div>
-      <div class="field" style="align-self:end; flex:0 0 auto; min-width:0;" v-if="regularSlots.length && beforeCommit">
-        <button class="secondary" v-bind:disabled="busy || !staleCount" v-on:click="resyncMonth">
-          Re-apply template to [[ currentMonthYm ]][[ staleCount ? ' (' + staleCount + ' differ)' : '' ]]</button>
-      </div>
-    </div>
-    <p class="hint" v-if="guide">[[ STATE_HELP[currentMonthState] ]]</p>
-    <p class="hint" v-if="overrideMessage">[[ overrideMessage ]]
-      <a v-if="currentMonthState === 'closed'" v-bind:href="'/report?month=' + monthId">Month report</a></p>
-  </details>
 </div>
 {% endblock %}
 {% block page_script %}
